@@ -53,6 +53,7 @@ O `dist/` é estático e roda em qualquer host (Vercel, Netlify, GitHub Pages, C
 |---|---|
 | `VITE_RECOGNIZE_URL` | URL do servidor de reconhecimento. |
 | `VITE_FEEDBACK_URL` | Opcional. Link do botão "Mandar feedback". |
+| `VITE_TELEMETRY_URL` | Opcional. Endpoint que recebe a telemetria anônima (`POST`, corpo JSON em texto puro). Vazio = sem telemetria. |
 
 ## Contrato do servidor
 
@@ -78,7 +79,9 @@ Resposta:
 
 ## Privacidade
 
-A foto da carta vai para o servidor só para ser identificada. Ela fica no máximo ~6 horas em disco para depuração e depois é apagada. O site não tem conta, cookie de rastreio nem analytics. A lista de cartas fica só no seu aparelho.
+A foto da carta vai para o servidor só para ser identificada. Ela fica no máximo ~6 horas em disco para depuração e depois é apagada. O site não tem conta nem cookie. A lista de cartas fica só no seu aparelho.
+
+A versão publicada coleta telemetria anônima para medir o acerto do scanner: um ID aleatório por aparelho (gerado no localStorage), o país (vindo da CDN), a origem do acesso e os eventos de scan (cartas candidatas, confiança, tempo, "não é essa"). Não vai foto, IP nem nada que identifique a pessoa. O código está em `src/telemetry.ts`. Ele só envia quando o build define `VITE_TELEMETRY_URL`, então um build seu não manda nada.
 
 ## Créditos
 

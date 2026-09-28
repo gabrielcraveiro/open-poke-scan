@@ -4,6 +4,7 @@ import { cardImage, isWarm, wakeServer, type Card, type Recognition } from "./re
 import { ligaUrl, mypUrl } from "./links";
 import { formatPrice, formatPriceDetail, getPrice } from "./prices";
 import * as session from "./session";
+import { referrerHost, track } from "./telemetry";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -53,6 +54,17 @@ const scanner = new Scanner(video, frame, quadSvg, {
     loading.hidden = false;
   },
   result(res) {
+    track("scan", {
+      mode: scanner.slingMode ? "sling" : "hand",
+      ok: !!res,
+      confident: !!res?.confident,
+      number_match: !!res?.numberMatch,
+      cos: res?.card.cos ?? null,
+      api_id: res?.card.api_id ?? null,
+      top: res?.candidates.map((c) => c.api_id) ?? [],
+      ms: res?.ms ?? null,
+      warm: isWarm(),
+    });
     serverNote.hidden = true;
     loading.hidden = true;
     if (scanner.slingMode) return onSlingResult(res);
@@ -69,11 +81,13 @@ function onSlingResult(res: Recognition | null): void {
   const strong = !!res && res.confident && (res.numberMatch || res.card.cos >= SLING_MIN_COS);
   if (!res || !strong) {
     navigator.vibrate?.(25);
+    track("sling_reject", { api_id: res?.card.api_id ?? null, cos: res?.card.cos ?? null });
     scanner.slingReject();
     return;
   }
   if (scanner.slingAccept(res) === "duplicate") return;
   session.add(res.card);
+  track("add", { api_id: res.card.api_id, via: "sling" });
   navigator.vibrate?.([12, 40, 12]);
   showVerify(res.card);
 }
@@ -156,6 +170,7 @@ function renderAlternatives(rec: Recognition): void {
     cap.textContent = `${c.name} ${code(c)}`;
     b.append(img, cap);
     b.onclick = () => {
+      track("alt_pick", { from: rec.card.api_id, to: c.api_id });
       const picked: Recognition = { ...rec, card: c, numberMatch: false, confident: true };
       current = picked;
       fillSheet(c, picked);
@@ -237,10 +252,17 @@ async function startCamera(): Promise<void> {
 $("start-btn").onclick = () => void startCamera();
 $("shutter").onclick = () => { if (started) scanner.captureNow(); };
 $("again-btn").onclick = hideSheet;
-$("wrong-btn").onclick = () => { hideSheet(); toast("Ok — aponte de novo para a carta"); };
+$("wrong-btn").onclick = () => {
+  if (current) track("wrong", { api_id: current.card.api_id, top: current.candidates.map((c) => c.api_id) });
+  hideSheet();
+  toast("Ok — aponte de novo para a carta");
+};
+$("link-liga").addEventListener("click", () => track("link", { store: "liga", api_id: current?.card.api_id }));
+$("link-myp").addEventListener("click", () => track("link", { store: "myp", api_id: current?.card.api_id }));
 $("add-btn").onclick = () => {
   if (!current) return;
   session.add(current.card);
+  track("add", { api_id: current.card.api_id, via: "sheet" });
   toast(`✓ ${current.card.name} adicionada`);
   hideSheet();
 };
@@ -270,12 +292,16 @@ $("drawer-close").onclick = () => { drawer.hidden = true; };
 $("copy-btn").onclick = async () => {
   try {
     await navigator.clipboard.writeText(session.toText());
+    track("export", { kind: "copy", n: session.all().length });
     toast("Lista copiada");
   } catch {
     toast("Não deu para copiar neste navegador");
   }
 };
-$("csv-btn").onclick = () => download("cartas.csv", session.toCsv(), "text/csv;charset=utf-8");
+$("csv-btn").onclick = () => {
+  track("export", { kind: "csv", n: session.all().length });
+  download("cartas.csv", session.toCsv(), "text/csv;charset=utf-8");
+};
 $("clear-btn").onclick = () => {
   if (!session.all().length) return;
   const btn = $("clear-btn");
@@ -309,6 +335,12 @@ renderList();
 // Acorda o servidor já na abertura da página: o cold start (~20s) passa
 // enquanto a pessoa lê a tela e libera a câmera.
 wakeServer();
+track("open", {
+  ref: referrerHost(),
+  mobile: /Mobi|Android|iPhone/i.test(navigator.userAgent),
+  lang: navigator.language,
+  sling: scanner.slingMode,
+});
 // A máquina suspende depois de alguns minutos ociosa. Pingar enquanto a
 // câmera está aberta evita pagar o cold start no meio de um lote.
 setInterval(() => { if (started && !document.hidden) wakeServer(); }, 150_000);
