@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0f1115" />
+    <meta name="description" content="Aponte a câmera para uma carta Pokémon TCG e descubra qual é, com preço de referência e links para Liga e MYP." />
+    <title>open-poke-scan — scanner de cartas Pokémon</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🃏</text></svg>" />
+  </head>
+  <body>
+    <main id="app">
+      <header class="topbar">
+        <h1 class="brand">open-poke-scan</h1>
+        <div class="topbar-actions">
+          <button id="torch-btn" class="icon-btn" type="button" hidden aria-pressed="false" title="Lanterna">🔦</button>
+          <button id="sling-btn" class="chip" type="button" aria-pressed="false" title="Modo sling: adiciona sozinho e vai para a próxima carta">Sling</button>
+          <button id="list-btn" class="chip" type="button" title="Cartas escaneadas">Lista <span id="list-count" class="badge">0</span></button>
+        </div>
+      </header>
+
+      <section class="camera" aria-label="Câmera">
+        <video id="video" playsinline muted autoplay></video>
+        <div id="frame" class="frame" aria-hidden="true"></div>
+        <svg id="quad" class="quad" aria-hidden="true"><path class="quad-mask" fill-rule="evenodd"></path><path class="quad-poly"></path></svg>
+        <div class="progress" aria-hidden="true"><div id="progress-bar"></div></div>
+        <p id="status" class="status" role="status" aria-live="polite">Abrindo a câmera…</p>
+        <div id="verify" class="verify" hidden></div>
+        <div id="start" class="start">
+          <p>Aponte a câmera para uma carta Pokémon TCG. O scanner identifica a carta e mostra o preço de referência.</p>
+          <button id="start-btn" class="primary" type="button">Abrir câmera</button>
+          <p class="fineprint">A foto da carta vai para o servidor só para ser identificada. Ela fica no máximo ~6 horas em disco para depuração e depois é apagada.</p>
+        </div>
+      </section>
+
+      <footer class="controls">
+        <p id="server-note" class="server-note" hidden>Acordando o servidor… a primeira carta pode levar até ~20s.</p>
+        <button id="shutter" class="shutter" type="button" aria-label="Capturar agora"></button>
+        <a id="feedback-link" class="feedback" href="#" target="_blank" rel="noopener" hidden>Mandar feedback</a>
+      </footer>
+
+      <div id="sheet" class="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+        <div class="sheet-body">
+          <img id="sheet-img" class="sheet-img" alt="" />
+          <div class="sheet-info">
+            <h2 id="sheet-title"></h2>
+            <p id="sheet-set" class="muted"></p>
+            <p id="sheet-price" class="price"></p>
+            <p id="sheet-confidence" class="muted small"></p>
+            <div class="links">
+              <a id="link-liga" target="_blank" rel="noopener">Ver na Liga ↗</a>
+              <a id="link-myp" target="_blank" rel="noopener">Ver na MYP ↗</a>
+            </div>
+          </div>
+        </div>
+        <div id="sheet-alts" class="alts" hidden></div>
+        <div class="sheet-actions">
+          <button id="add-btn" class="primary" type="button">Adicionar à lista</button>
+          <button id="wrong-btn" type="button">Não é essa</button>
+          <button id="again-btn" type="button">Escanear outra</button>
+        </div>
+      </div>
+
+      <div id="loading" class="loading" hidden>
+        <img id="loading-img" alt="" />
+        <p>Identificando carta…</p>
+      </div>
+
+      <aside id="drawer" class="drawer" hidden aria-labelledby="drawer-title">
+        <div class="drawer-head">
+          <h2 id="drawer-title">Cartas escaneadas</h2>
+          <button id="drawer-close" class="icon-btn" type="button" aria-label="Fechar">✕</button>
+        </div>
+        <ul id="list" class="list"></ul>
+        <p id="list-empty" class="muted">Nenhuma carta ainda.</p>
+        <div class="drawer-actions">
+          <button id="copy-btn" type="button">Copiar lista</button>
+          <button id="csv-btn" type="button">Baixar CSV</button>
+          <button id="clear-btn" type="button" class="danger">Limpar</button>
+        </div>
+        <p class="fineprint">A lista fica só neste aparelho. Preços de referência: Cardmarket (EUR) e TCGplayer (USD), via TCGdex.</p>
+      </aside>
+
+      <div id="toast" class="toast" hidden role="status"></div>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

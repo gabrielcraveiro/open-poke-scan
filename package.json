@@ -1,0 +1,21 @@
+{
+  "name": "open-poke-scan",
+  "version": "0.1.0",
+  "description": "Scanner de cartas Pokémon TCG pela câmera do celular, direto no navegador.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "scanic": "^1.6.0"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vite": "^8.3.1"
+  },
+  "private": true
+}
