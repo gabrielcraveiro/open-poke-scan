@@ -2,7 +2,7 @@ import "./style.css";
 import { Scanner } from "./scanner";
 import { cardImage, isWarm, wakeServer, type Card, type Recognition } from "./recognize";
 import { ligaUrl, mypUrl } from "./links";
-import { formatPrice, getPrice } from "./prices";
+import { formatPrice, formatPriceDetail, getPrice } from "./prices";
 import * as session from "./session";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -95,7 +95,7 @@ function showVerify(card: Card): void {
   info.append(name, meta, price);
   verify.append(img, info);
   verify.hidden = false;
-  getPrice(card.api_id).then((p) => { price.textContent = formatPrice(p); });
+  getPrice(card).then((p) => { price.textContent = formatPrice(p); });
   clearTimeout(verifyTimer);
   verifyTimer = window.setTimeout(() => { verify.hidden = true; }, 2600);
 }
@@ -105,9 +105,13 @@ function fillSheet(card: Card, rec: Recognition): void {
   $("sheet-title").textContent = card.name;
   $("sheet-set").textContent = `${card.set_name} · ${code(card)}`;
   const priceEl = $("sheet-price");
+  const detailEl = $("sheet-price-detail");
   priceEl.textContent = "Buscando preço…";
-  getPrice(card.api_id).then((p) => {
-    if (current && current.card.api_id === card.api_id) priceEl.textContent = formatPrice(p);
+  detailEl.textContent = "";
+  getPrice(card).then((p) => {
+    if (!current || current.card.api_id !== card.api_id) return;
+    priceEl.textContent = formatPrice(p);
+    detailEl.textContent = formatPriceDetail(p);
   });
   const conf = card === rec.card && rec.numberMatch ? "Número conferido pelo OCR"
     : `Semelhança ${(card.cos * 100).toFixed(0)}%${rec.confident ? "" : " — confira se é essa"}`;
@@ -119,7 +123,7 @@ function fillSheet(card: Card, rec: Recognition): void {
 function showSheet(rec: Recognition): void {
   current = rec;
   fillSheet(rec.card, rec);
-  $("sheet-alts").hidden = true;
+  renderAlternatives(rec);
   sheet.hidden = false;
 }
 
@@ -129,19 +133,17 @@ function hideSheet(): void {
   scanner.resume();
 }
 
-function showAlternatives(): void {
-  if (!current) return;
-  const rec = current;
+// As outras candidatas ficam sempre à mostra: "Não é essa" volta direto para
+// a câmera, e quem reconhece a carta certa aqui escolhe com um toque.
+function renderAlternatives(rec: Recognition): void {
   const alts = $("sheet-alts");
   alts.replaceChildren();
   const others = rec.candidates.filter((c) => c.api_id !== rec.card.api_id).slice(0, 4);
-  if (!others.length) {
-    toast("Sem outras opções. Tente escanear de novo.");
-    return;
-  }
+  alts.hidden = !others.length;
+  if (!others.length) return;
   const label = document.createElement("p");
   label.className = "muted small";
-  label.textContent = "É alguma destas?";
+  label.textContent = "Ou é alguma destas?";
   alts.append(label);
   for (const c of others) {
     const b = document.createElement("button");
@@ -154,13 +156,13 @@ function showAlternatives(): void {
     cap.textContent = `${c.name} ${code(c)}`;
     b.append(img, cap);
     b.onclick = () => {
-      current = { ...rec, card: c, numberMatch: false, confident: true };
-      fillSheet(c, current);
-      alts.hidden = true;
+      const picked: Recognition = { ...rec, card: c, numberMatch: false, confident: true };
+      current = picked;
+      fillSheet(c, picked);
+      renderAlternatives({ ...picked, candidates: [c, ...rec.candidates.filter((x) => x.api_id !== c.api_id)] });
     };
     alts.append(b);
   }
-  alts.hidden = false;
 }
 
 function renderList(): void {
@@ -182,7 +184,7 @@ function renderList(): void {
     meta.textContent = `${e.card.set_name} ${code(e.card)}`;
     const price = document.createElement("span");
     price.className = "price small";
-    getPrice(e.card.api_id).then((p) => { price.textContent = p ? formatPrice(p) : ""; });
+    getPrice(e.card).then((p) => { price.textContent = p ? formatPrice(p) : ""; });
     const links = document.createElement("span");
     links.className = "small";
     const liga = document.createElement("a");
@@ -235,7 +237,7 @@ async function startCamera(): Promise<void> {
 $("start-btn").onclick = () => void startCamera();
 $("shutter").onclick = () => { if (started) scanner.captureNow(); };
 $("again-btn").onclick = hideSheet;
-$("wrong-btn").onclick = showAlternatives;
+$("wrong-btn").onclick = () => { hideSheet(); toast("Ok — aponte de novo para a carta"); };
 $("add-btn").onclick = () => {
   if (!current) return;
   session.add(current.card);

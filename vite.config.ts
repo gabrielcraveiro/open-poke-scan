@@ -1,5 +1,21 @@
 import { defineConfig } from "vite";
 
+// Em produção esses caminhos são rewrites do vercel.json. O proxy repete o
+// mesmo mapeamento no `npm run dev`.
 export default defineConfig({
   build: { target: "es2022" },
+  server: {
+    proxy: {
+      "/api/price-brl": {
+        target: "https://cartinhaspoke.vercel.app",
+        changeOrigin: true,
+        rewrite: (p) => p.replace(/^\/api\/price-brl/, "/api/public/card-price-brl"),
+      },
+      "/api/tcgdex": {
+        target: "https://api.tcgdex.net",
+        changeOrigin: true,
+        rewrite: (p) => p.replace(/^\/api\/tcgdex/, "/v2"),
+      },
+    },
+  },
 });
