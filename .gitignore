@@ -5,3 +5,9 @@ dist/
 !.env.example
 .DS_Store
 .vercel
+
+# server: generated files (model, index, cache)
+server/models/*
+!server/models/.gitkeep
+server/.index-cache/
+__pycache__/

@@ -1,0 +1,23 @@
+# Copy to fly.toml and set your own app name: `fly launch --copy-config --no-deploy`.
+app = "your-card-recognizer"
+primary_region = "gru"
+
+[build]
+
+[env]
+  # Put your site URL here to block other sites from using your server.
+  ALLOW_ORIGINS = "*"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  # 'suspend' freezes RAM to disk: no compute cost while idle, resumes in ~1-3s
+  # with the model already loaded. 'stop' would reload the model (~20s).
+  auto_stop_machines = "suspend"
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[vm]]
+  memory = "1gb"
+  cpu_kind = "shared"
+  cpus = 1

@@ -28,7 +28,7 @@ câmera → retícula viva (scanic, detecta os 4 cantos da carta)
 
 O reconhecimento roda num servidor, não no celular. Rodar o modelo no navegador travava a tela e levava segundos por carta. No servidor quente, um scan leva ~0,5s.
 
-Este repositório tem só o cliente web. O servidor de reconhecimento é um serviço separado.
+O site publicado usa o nosso servidor. Para rodar o seu do zero (modelo público + índice gerado a partir do TCGdex), veja [`server/README.md`](server/README.md).
 
 ## Rodar localmente
 
