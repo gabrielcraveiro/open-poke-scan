@@ -30,6 +30,8 @@ O reconhecimento roda num servidor, não no celular. Rodar o modelo no navegador
 
 O site publicado usa o nosso servidor. Para rodar o seu do zero (modelo público + índice gerado a partir do TCGdex), veja [`server/README.md`](server/README.md).
 
+Decisões de arquitetura e o porquê de cada uma: [`docs/arquitetura.md`](docs/arquitetura.md).
+
 ## Rodar localmente
 
 ```bash
