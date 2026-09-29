@@ -35,9 +35,11 @@ O site não tem banco, login nem backend próprio. Tudo que ele guarda (a lista 
 
 1. **Retícula viva.** A cada tick, o [scanic](https://github.com/marquaye/scanic) procura os 4 cantos da carta num proxy do frame inteiro. Um salto de posição só é aceito quando duas detecções seguidas confirmam o lugar novo, senão o contorno pularia para reflexos.
 2. **Gates.** A captura dispara quando a imagem fica parada e nítida: nitidez a 85% do pico visto, com o pico decaindo aos poucos para não travar em "Focando…". Se os gates nunca abrem (mão tremendo), dispara mesmo assim depois de 3s (2,5s no sling).
-3. **Corte.** Com o quad, a carta é recortada com correção de perspectiva, re-detectando no frame exato da captura. Se o recorte sai com proporção fora de 0,62–0,85, ele é descartado e vale o corte fixo da retícula.
+3. **Corte.** Com o quad, a carta é recortada com correção de perspectiva e reamostrada para a proporção exata da carta (63:88).
+   - Re-detecta no frame exato da captura, mas só troca se o contorno novo estiver a menos de 8% da diagonal do que estava na tela. Com mão, capa ou pilha na cena, a re-detecção às vezes pega outro quadrilátero.
+   - Se o recorte sai com proporção fora de 0,62–0,85, tenta o contorno re-detectado. Se também falhar, vale a caixa do contorno com 6% de folga, e o servidor acha a carta lá dentro. O corte fixo da retícula só entra sem contorno nenhum.
 4. **Reconhecimento.** O JPEG (lado maior até 1280px) vai para o servidor com `pre=1` quando já é só a carta.
-5. **Resultado.** Modo normal: tela com a carta, o preço, as alternativas e os links. Modo sling: entra direto na lista, se o match for forte.
+5. **Resultado.** Modo normal: tela com a carta, o preço, as alternativas e os links. Modo sling: entra direto na lista, se o servidor estiver confiante. Quadro sem carta (`not_card`): aviso e volta para a câmera.
 
 ## Decisões
 
@@ -54,7 +56,7 @@ O loop da câmera roda a cada 150ms e mexe no DOM direto (contorno SVG, barra de
 Os números do scanner (proporção 0,62–0,85, limiar de diferença 40, presença 16, foco 85%) foram calibrados com scans reais no app de origem. Os comentários no código dizem de onde veio cada um. Mudar um deles muda o acerto, não só o visual.
 
 ### Modo sling conservador
-- Só adiciona sozinho com sinal forte: número conferido pelo OCR ou cosseno ≥ 0,62. Na dúvida a carta não entra: um frame ruim durante a troca de carta já adicionou a carta errada.
+- Só adiciona sozinho quando o servidor responde `confident`: número+total conferido pelo OCR, ou cosseno ≥ 0,72 com folga ≥ 0,03 sobre a 2ª carta (~99% de precisão num eval de 160 scans reais). Na dúvida a carta não entra: um frame ruim durante a troca de carta já adicionou a carta errada. O corte antigo (cosseno ≥ 0,62) aceitava cartas de arte igual em sets diferentes.
 - A mesma carta só é somada de novo depois de sair do quadro. Uma janela de tempo não servia: a carta parada no quadro furava a janela.
 - Rearma com o quadro vazio, com carta nova (diferença grande contra a carta capturada) ou depois de 4s desarmado.
 
@@ -111,6 +113,7 @@ Na Vercel, `VITE_RECOGNIZE_URL` e `VITE_TELEMETRY_URL` estão definidas em Produ
 |---|---|
 | 2026-09-28 | Versão inicial: scan, sling, lista local, links de busca, preço de referência. |
 | 2026-09-28 | Preço em R$; "Não é essa" volta para a câmera; chamadas de preço pela mesma origem. |
+| 2026-09-29 | Cantos em ordem cíclica (carta em pé até ±85°), recorte 63:88, re-detecção só perto do contorno da tela, caixa do contorno como reserva, sling pelo `confident` do servidor, aviso de quadro sem carta. |
 | 2026-09-28 | Telemetria anônima (só na versão publicada). |
 | 2026-09-28 | `server/` para rodar o reconhecimento do zero. |
 | 2026-09-28 | Só preço em real (sem EUR/USD). |

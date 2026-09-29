@@ -19,16 +19,43 @@ export function avgDelta(a: Quad, b: Quad): number {
 
 // Re-rotula os cantos por geometria: com a carta na diagonal os rótulos do
 // detector trocam entre frames, e um warp com rótulos trocados sai cisalhado.
+// Os extremos de x±y (versão anterior) perdiam um canto com a carta perto de
+// 45° e deitavam a carta acima disso (teste sintético: 209/420 em pé). Ordem
+// cíclica pelo ângulo em torno do centro + lado curto de cima como topo deixa
+// a carta em pé até ±85° (3420/3420).
 export function order(c: Quad): Quad {
   const pts = KEYS.map((k) => c[k]);
-  let tl = pts[0], br = pts[0], tr = pts[0], bl = pts[0];
-  for (const p of pts) {
-    if (p.x + p.y < tl.x + tl.y) tl = p;
-    if (p.x + p.y > br.x + br.y) br = p;
-    if (p.x - p.y > tr.x - tr.y) tr = p;
-    if (p.x - p.y < bl.x - bl.y) bl = p;
-  }
-  return { topLeft: tl, topRight: tr, bottomRight: br, bottomLeft: bl };
+  const cx = (pts[0].x + pts[1].x + pts[2].x + pts[3].x) / 4;
+  const cy = (pts[0].y + pts[1].y + pts[2].y + pts[3].y) / 4;
+  // y cresce para baixo: ângulo crescente = sentido horário na tela (TL→TR→BR→BL).
+  const cyc = pts.slice().sort((a, b) => Math.atan2(a.y - cy, a.x - cx) - Math.atan2(b.y - cy, b.x - cx));
+  const d = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
+  const shortFirst = d(cyc[0], cyc[1]) + d(cyc[2], cyc[3]) <= d(cyc[1], cyc[2]) + d(cyc[3], cyc[0]) ? 0 : 1;
+  const midY = (i: number) => (cyc[i % 4].y + cyc[(i + 1) % 4].y) / 2;
+  const start = midY(shortFirst) <= midY(shortFirst + 2) ? shortFirst : shortFirst + 2;
+  const at = (i: number) => cyc[(start + i) % 4];
+  return { topLeft: at(0), topRight: at(1), bottomRight: at(2), bottomLeft: at(3) };
+}
+
+// Re-detecção da captura: aceita o quad novo só se cada canto andou, em média,
+// menos que isto da diagonal do quad rastreado. A mão mexe ~1-3% em 200ms; um
+// contorno DIFERENTE (mão+carta, capa, pilha) fica bem acima disso.
+export const FRESH_MAX_REL = 0.08;
+
+/** Average corner movement between two quads, relative to the diagonal of `ref`. */
+export function relDelta(a: Quad, ref: Quad): number {
+  const diag = Math.hypot(ref.topLeft.x - ref.bottomRight.x, ref.topLeft.y - ref.bottomRight.y) || 1;
+  return avgDelta(a, ref) / diag;
+}
+
+/** Axis-aligned box around the quad, grown by `pad` on each side and clamped to w×h. */
+export function bbox(c: Quad, w: number, h: number, pad: number): { x: number; y: number; w: number; h: number } {
+  const xs = KEYS.map((k) => c[k].x), ys = KEYS.map((k) => c[k].y);
+  let x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  const px = (x1 - x0) * pad, py = (y1 - y0) * pad;
+  x0 = Math.max(0, x0 - px); y0 = Math.max(0, y0 - py);
+  x1 = Math.min(w, x1 + px); y1 = Math.min(h, y1 + py);
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
 }
 
 // Rejeita detecções-lixo: lados opostos díspares, área irrisória ou tela

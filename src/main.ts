@@ -19,9 +19,6 @@ const verify = $("verify");
 const drawer = $("drawer");
 const serverNote = $("server-note");
 
-// Sling só adiciona sozinho com sinal forte. Sem isso, um frame ruim durante
-// a troca de carta entrava na lista como a carta errada.
-const SLING_MIN_COS = 0.62;
 const SLING_KEY = "openpokescan.sling";
 
 let current: Recognition | null = null;
@@ -59,6 +56,7 @@ const scanner = new Scanner(video, frame, quadSvg, {
       ok: !!res,
       confident: !!res?.confident,
       number_match: !!res?.numberMatch,
+      not_card: !!res?.notCard,
       cos: res?.card.cos ?? null,
       api_id: res?.card.api_id ?? null,
       top: res?.candidates.map((c) => c.api_id) ?? [],
@@ -73,12 +71,22 @@ const scanner = new Scanner(video, frame, quadSvg, {
       scanner.resume();
       return;
     }
+    // Quadro sem carta (mão, mesa, tecido): mostrar a folha aqui exibia uma
+    // carta aleatória com "confira se é essa".
+    if (res.notCard) {
+      toast("Não vi uma carta — centralize a carta no quadro.");
+      scanner.resume();
+      return;
+    }
     showSheet(res);
   },
 });
 
 function onSlingResult(res: Recognition | null): void {
-  const strong = !!res && res.confident && (res.numberMatch || res.card.cos >= SLING_MIN_COS);
+  // `confident` do servidor já é o gate estrito (número+total, ou cos alto com
+  // folga sobre o 2º, ~99% de precisão medida). O cos >= 0.62 próprio aceitava
+  // gêmeas de arte e errava ~1 em 4.
+  const strong = !!res && res.confident && !res.notCard;
   if (!res || !strong) {
     navigator.vibrate?.(25);
     track("sling_reject", { api_id: res?.card.api_id ?? null, cos: res?.card.cos ?? null });

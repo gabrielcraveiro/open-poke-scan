@@ -470,25 +470,44 @@ export class Scanner {
     this.overlay.style.opacity = "1";
   }
 
-  private async warp(quad: Q.Quad): Promise<HTMLCanvasElement | null> {
+  /**
+   * Perspective-corrected photo of the card inside `quad`.
+   * Returns the photo, or `drop` (the quad to fall back to) when no warp is plausible.
+   */
+  private async warp(quad: Q.Quad): Promise<{ photo: HTMLCanvasElement | null; drop: Q.Quad | null }> {
     const scanic = this.scanic;
-    if (!scanic) return null;
+    if (!scanic) return { photo: null, drop: null };
     const v = this.video;
     const full = document.createElement("canvas");
     full.width = v.videoWidth;
     full.height = v.videoHeight;
     full.getContext("2d")!.drawImage(v, 0, 0);
     // O quad recebido é de até ~200ms atrás e a mão mexe nesse meio-tempo.
-    // Re-detecta neste frame exato; o quad antigo fica de reserva.
+    // Re-detecta neste frame exato; o quad antigo fica de reserva. Só troca se
+    // for o MESMO contorno: com mão, capa ou pilha na cena a re-detecção às
+    // vezes pega outro quadrilátero e o warp "endireitava" a coisa errada.
     let use = quad;
+    let far: Q.Quad | null = null;
     try {
       const rd = await scanic.scanDocument(full, { mode: "detect", maxProcessingDimension: QUAD_PROXY_DIM });
       if (rd?.success && rd.corners) {
         const fresh = Q.inset(Q.order(rd.corners));
-        if (Q.isSane(fresh, v.videoWidth, v.videoHeight)) use = fresh;
+        if (Q.isSane(fresh, v.videoWidth, v.videoHeight)) {
+          if (Q.relDelta(fresh, quad) < Q.FRESH_MAX_REL) use = fresh;
+          else far = fresh;
+        }
       }
     } catch { /* fica com o quad anterior */ }
-    const r = await scanic.extractDocument(full, use, { output: "canvas" });
+    let photo = await this.warpOne(full, use);
+    // Contorno rastreado deu warp impossível, mas a re-detecção achou outro
+    // quadrilátero plausível: tenta ele antes de desistir do warp.
+    if (!photo && far) photo = await this.warpOne(full, far);
+    return { photo, drop: photo ? null : use };
+  }
+
+  private async warpOne(full: HTMLCanvasElement, quad: Q.Quad): Promise<HTMLCanvasElement | null> {
+    const scanic = this.scanic!;
+    const r = await scanic.extractDocument(full, quad, { output: "canvas" });
     let cap = r?.success && r.output instanceof HTMLCanvasElement && r.output.width > 40 ? r.output : null;
     if (!cap) return null;
     // Carta é retrato. O embedding é sensível a rotação, então gira o warp deitado.
@@ -505,7 +524,15 @@ export class Scanner {
     // Em full-art/holo o detector agarra uma aresta interna e o warp sai com
     // um pedaço da carta. Fora da faixa, a carta inteira do corte fixo vale mais.
     const asp = cap.width / cap.height;
-    return asp < Q.WARP_ASPECT_MIN || asp > Q.WARP_ASPECT_MAX ? null : cap;
+    if (asp < Q.WARP_ASPECT_MIN || asp > Q.WARP_ASPECT_MAX) return null;
+    // O scanic dimensiona o warp pelo MAIOR lado de cada par, então a
+    // perspectiva residual sai como carta esticada (0.69-0.80 medido vs 0.716
+    // real). Reamostra para a proporção exata da carta.
+    const norm = document.createElement("canvas");
+    norm.width = cap.width;
+    norm.height = Math.round(cap.width * 88 / 63);
+    norm.getContext("2d")!.drawImage(cap, 0, 0, norm.width, norm.height);
+    return norm;
   }
 
   private async capture(quad?: Q.Quad): Promise<void> {
@@ -521,8 +548,22 @@ export class Scanner {
     let photo: HTMLCanvasElement | null = null;
     let preCropped = false;
     if (quad) {
-      try { photo = await this.warp(quad); } catch { photo = null; }
+      let drop: Q.Quad | null = null;
+      try { ({ photo, drop } = await this.warp(quad)); } catch { photo = null; }
       preCropped = !!photo;
+      // Warp descartado: a carta está DENTRO do contorno que o usuário vê, não
+      // necessariamente no corte fixo (que cortava as laterais de carta grande).
+      // Recorta a caixa do contorno e deixa a detecção do servidor achar a carta.
+      if (!photo && drop) {
+        const v = this.video;
+        const b = Q.bbox(drop, v.videoWidth, v.videoHeight, 0.06);
+        if (b.w >= 40 && b.h >= 40) {
+          photo = document.createElement("canvas");
+          photo.width = Math.round(b.w);
+          photo.height = Math.round(b.h);
+          photo.getContext("2d")!.drawImage(v, b.x, b.y, b.w, b.h, 0, 0, photo.width, photo.height);
+        }
+      }
     }
     if (!photo) {
       const { px, py, pw, ph } = this.coords;

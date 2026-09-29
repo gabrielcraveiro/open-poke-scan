@@ -19,10 +19,12 @@ export interface Card {
 /** Result of one recognition call. */
 export interface Recognition {
   card: Card;
-  /** True when the OCR number+total matched or the cosine is high. */
+  /** True when the OCR number+total matched, or the cosine is high with a clear lead over the 2nd card. */
   confident: boolean;
   /** True when the OCR number+total picked the card. */
   numberMatch: boolean;
+  /** True when the photo does not look like any card (hand, table, cloth). */
+  notCard: boolean;
   /** Top candidates, best first. `card` is always in the list. */
   candidates: Card[];
   ms: number;
@@ -117,6 +119,7 @@ export async function recognize(capture: HTMLCanvasElement, preCropped: boolean)
     card: d.card,
     confident: !!d.confident,
     numberMatch: !!(d.ocr && d.ocr.match),
+    notCard: !!d.not_card,
     candidates,
     ms: r.ms,
   };
