@@ -70,9 +70,14 @@ export function isSane(c: Quad, w: number, h: number): boolean {
   if (rH < 0.6 || rH > 1.67 || rV < 0.6 || rV > 1.67) return false;
   const avgW = (top + bottom) / 2, avgH = (left + right) / 2;
   const aspect = avgW / avgH;
-  const portrait = aspect >= 0.55 && aspect <= 0.95;
-  const landscape = aspect >= 1.05 && aspect <= 1.82;
-  if (!portrait && !landscape) return false;
+  // order() põe o lado CURTO no topo, então aspect <= 1 sempre.
+  if (aspect < 0.55 || aspect > 0.95) return false;
+  // Contorno DEITADO no quadro (lado curto de cima mais vertical que
+  // horizontal) = quase sempre uma região interna da carta: caixa de ataque,
+  // faixa do nome. O warp "endireitava" essa faixa e mandava meia carta de
+  // lado. Carta de verdade, na mão ou no suporte, fica em pé; deitada cai no
+  // corte fixo, que ainda funciona.
+  if (Math.abs(c.topRight.y - c.topLeft.y) > Math.abs(c.topRight.x - c.topLeft.x)) return false;
   const area = avgW * avgH;
   if (area < w * h * 0.015 || area > w * h * 0.95) return false;
   for (const k of KEYS) {

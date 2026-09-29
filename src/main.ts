@@ -259,7 +259,12 @@ async function startCamera(): Promise<void> {
 // ── Eventos ─────────────────────────────────────────────────────────────
 $("start-btn").onclick = () => void startCamera();
 $("shutter").onclick = () => { if (started) scanner.captureNow(); };
-$("again-btn").onclick = hideSheet;
+// "Escanear outra" sai sem dizer que a carta está errada. Registrar separado
+// do "wrong": sem isso, sair depois de conferir o preço contava como erro.
+$("again-btn").onclick = () => {
+  if (current) track("skip", { api_id: current.card.api_id });
+  hideSheet();
+};
 $("wrong-btn").onclick = () => {
   if (current) track("wrong", { api_id: current.card.api_id, top: current.candidates.map((c) => c.api_id) });
   hideSheet();

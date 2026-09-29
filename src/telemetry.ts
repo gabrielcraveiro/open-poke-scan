@@ -9,7 +9,7 @@ const URL_ = import.meta.env.VITE_TELEMETRY_URL || "";
 const DEVICE_KEY = "openpokescan.device";
 
 /** Event names accepted by the telemetry endpoint. */
-export type EventName = "open" | "scan" | "add" | "wrong" | "alt_pick" | "sling_reject" | "link" | "export";
+export type EventName = "open" | "scan" | "add" | "wrong" | "skip" | "alt_pick" | "sling_reject" | "link" | "export";
 
 function deviceId(): string {
   try {
