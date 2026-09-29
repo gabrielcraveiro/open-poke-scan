@@ -11,11 +11,6 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (p) => p.replace(/^\/api\/price-brl/, "/api/public/card-price-brl"),
       },
-      "/api/tcgdex": {
-        target: "https://api.tcgdex.net",
-        changeOrigin: true,
-        rewrite: (p) => p.replace(/^\/api\/tcgdex/, "/v2"),
-      },
     },
   },
 });

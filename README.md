@@ -7,7 +7,7 @@ Scanner de cartas Pokémon TCG pela câmera do celular, direto no navegador. Apo
 ## O que faz
 
 - **Scan:** a retícula acompanha a carta e captura sozinha quando a imagem fica parada e nítida. O botão redondo força a captura.
-- **Resultado:** imagem, nome, set e número da carta; preço de referência em real (mercado brasileiro) e lá fora (Cardmarket em EUR e TCGplayer em USD, via [TCGdex](https://tcgdex.dev)); links de busca na Liga e na MYP.
+- **Resultado:** imagem, nome, set e número da carta; preço de referência em real (mercado brasileiro); links de busca na Liga e na MYP.
 - **"Não é essa":** volta para a câmera. As outras candidatas aparecem no resultado para escolher com um toque.
 - **Modo sling:** para lotes. Jogue as cartas uma a uma sob a câmera e cada carta reconhecida com confiança entra na lista sozinha. Na dúvida, a carta não entra: tire e ponha de novo.
 - **Lista:** fica só no aparelho (localStorage). Dá para copiar como texto ou baixar em CSV.

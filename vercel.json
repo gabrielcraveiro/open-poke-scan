@@ -1,6 +1,5 @@
 {
   "rewrites": [
-    { "source": "/api/price-brl", "destination": "https://cartinhaspoke.vercel.app/api/public/card-price-brl" },
-    { "source": "/api/tcgdex/:path*", "destination": "https://api.tcgdex.net/v2/:path*" }
+    { "source": "/api/price-brl", "destination": "https://cartinhaspoke.vercel.app/api/public/card-price-brl" }
   ]
 }
