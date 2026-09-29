@@ -35,7 +35,12 @@ export interface Recognition {
 // reprovava todo scan, então o teto depende do estado.
 const POST_WARM_MS = 12000;
 const POST_COLD_MS = 40000;
-const UPLOAD_MAX_DIM = 1280;
+// 1280 → 900 e qualidade 0.8 → 0.75: metade do upload (213 → 109 KB) com
+// reconhecimento e OCR idênticos no servidor (ele reduz para 336px no
+// embedding e normaliza a faixa do número para 600px). 800px já fazia o OCR
+// errar dígito. Upload é o gargalo em rede ruim.
+const UPLOAD_MAX_DIM = 900;
+const UPLOAD_QUALITY = 0.75;
 
 let warm = false;
 
@@ -100,7 +105,7 @@ async function post(blob: Blob, preCropped: boolean, budgetMs: number) {
  * @returns The recognition, or null on network error, timeout or no match.
  */
 export async function recognize(capture: HTMLCanvasElement, preCropped: boolean): Promise<Recognition | null> {
-  const blob = await toJpeg(downscale(capture));
+  const blob = await toJpeg(downscale(capture), UPLOAD_QUALITY);
   if (!blob) return null;
   const budget = warm ? POST_WARM_MS : POST_COLD_MS;
   let r = await post(blob, preCropped, budget);
