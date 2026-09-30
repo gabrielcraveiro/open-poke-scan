@@ -7,6 +7,7 @@ import * as Q from "./quad";
 import { frameDiff, glare, presence, sharpness } from "./pixels";
 import { recognize, type Recognition } from "./recognize";
 import { detectYolo, preloadYolo, YOLO_MIN_SCORE } from "./yolo";
+import { openSavedCamera, tuneCamera, type CameraInfo } from "./camera";
 
 type Scanic = typeof import("scanic");
 
@@ -148,7 +149,8 @@ export class Scanner {
       { video: true },
     ];
     let lastErr: DOMException | null = null;
-    for (const c of attempts) {
+    this.stream = await openSavedCamera();
+    for (const c of this.stream ? [] : attempts) {
       try {
         this.stream = await navigator.mediaDevices.getUserMedia(c);
         break;
@@ -165,6 +167,7 @@ export class Scanner {
       };
       return map[lastErr?.name || ""] || `Câmera indisponível (${lastErr?.name || "erro"}).`;
     }
+    ({ stream: this.stream, info: this.camInfo } = await tuneCamera(this.stream));
     this.video.srcObject = this.stream;
     // iOS: o play() pode resolver antes do primeiro frame. Espera o metadata DESTE stream.
     await new Promise<void>((resolve) => {
@@ -443,6 +446,9 @@ export class Scanner {
       out[k] = { x: cx + r.corners[k].x / s2, y: cy + r.corners[k].y / s2 };
     return ml ? Q.inset(out, -ML_GROW) : out;
   }
+
+  /** What the browser reports about the open camera (lens, focus, resolution). */
+  camInfo: CameraInfo | null = null;
 
   /** Detector variant, from ?det= or the badge button (saved in localStorage): ml, ml-full, classic, classic-full (default), yolo. */
   detMode: DetMode = readDetMode();
