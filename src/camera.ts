@@ -50,6 +50,29 @@ async function open(deviceId: string): Promise<MediaStream | null> {
   }
 }
 
+// Tudo o que já foi pedido à faixa (foco, lanterna). Vai inteiro em cada
+// applyConstraints, que substitui o conjunto anterior.
+let advanced: Record<string, unknown> = {};
+
+/**
+ * Change camera settings (focus, torch) without losing the ones set before or
+ * the resolution.
+ *
+ * @param track The video track.
+ * @param patch Settings to change, for example `{ torch: true }`.
+ * @returns True when the browser accepted the change.
+ */
+export async function applyCamera(track: MediaStreamTrack, patch: Record<string, unknown>): Promise<boolean> {
+  const next = { ...advanced, ...patch };
+  try {
+    await track.applyConstraints({ ...HI_RES, advanced: [next as MediaTrackConstraintSet] });
+    advanced = next;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Open the lens saved by a previous tuneCamera(), or null when there is none or it fails. */
 export async function openSavedCamera(): Promise<MediaStream | null> {
   let id: string | null = null;
@@ -95,11 +118,18 @@ export async function tuneCamera(stream: MediaStream): Promise<{ stream: MediaSt
   } catch { /* fica com o stream que tiver */ }
 
   const c = caps(track);
-  if (c.focusMode?.includes("continuous")) {
-    try { await track.applyConstraints({ advanced: [{ focusMode: "continuous" } as MediaTrackConstraintSet] }); } catch { /* sem suporte */ }
+  // applyConstraints SUBSTITUI todas as restrições do stream. Sem repetir a
+  // resolução, o Firefox voltava ao padrão de 640×480 e o recorte da carta
+  // saía com ~300px (scan_log 1472-1476). Por isso a resolução vai junto, e
+  // cada pedido só sai quando o navegador anuncia suporte.
+  const focus: Record<string, unknown> = {};
+  if (c.focusMode?.includes("continuous")) focus.focusMode = "continuous";
+  // Foco no centro, onde fica a retícula.
+  if ((navigator.mediaDevices.getSupportedConstraints() as Record<string, boolean>).pointsOfInterest) {
+    focus.pointsOfInterest = [{ x: 0.5, y: 0.5 }];
   }
-  // Foco no centro, onde fica a retícula. O Chrome Android aceita; os outros ignoram.
-  try { await track.applyConstraints({ advanced: [{ pointsOfInterest: [{ x: 0.5, y: 0.5 }] } as MediaTrackConstraintSet] }); } catch { /* sem suporte */ }
+  advanced = {};
+  if (Object.keys(focus).length) await applyCamera(track, focus);
 
   const st = track.getSettings() as Settings;
   if (hasAutofocus(track) && st.deviceId) {

@@ -7,7 +7,7 @@ import * as Q from "./quad";
 import { frameDiff, glare, presence, sharpness } from "./pixels";
 import { recognize, type Recognition } from "./recognize";
 import { detectYolo, preloadYolo, YOLO_MIN_SCORE } from "./yolo";
-import { openSavedCamera, tuneCamera, type CameraInfo } from "./camera";
+import { applyCamera, openSavedCamera, tuneCamera, type CameraInfo } from "./camera";
 
 type Scanic = typeof import("scanic");
 
@@ -230,12 +230,7 @@ export class Scanner {
   async setTorch(on: boolean): Promise<boolean> {
     const track = this.stream?.getVideoTracks()[0];
     if (!track) return false;
-    try {
-      await track.applyConstraints({ advanced: [{ torch: on } as MediaTrackConstraintSet] });
-      return true;
-    } catch {
-      return false;
-    }
+    return applyCamera(track, { torch: on });
   }
 
   /**
