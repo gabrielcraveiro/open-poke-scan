@@ -64,6 +64,7 @@ const scanner = new Scanner(video, frame, quadSvg, {
       warm: isWarm(),
       det: scanner.detMode,
       det_ms: Math.round(scanner.detMs),
+      cap_det_ms: Math.round(scanner.capDetMs),
       cam: scanner.camInfo,
     });
     serverNote.hidden = true;

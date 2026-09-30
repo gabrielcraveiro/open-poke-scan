@@ -49,13 +49,14 @@ const ML_MIN_CONFIDENCE = 0.9;
 // para fora a partir do centro; o inset() de 2% do rastreio vem depois.
 const ML_GROW = 0.08;
 
-type DetMode = "ml" | "ml-full" | "classic" | "classic-full" | "yolo";
-const DET_MODES: readonly DetMode[] = ["ml", "ml-full", "classic", "classic-full", "yolo"];
+type DetMode = "ml" | "ml-full" | "classic" | "classic-full" | "yolo" | "hybrid";
+type Detector = Exclude<DetMode, "hybrid">;
+const DET_MODES: readonly DetMode[] = ["hybrid", "classic-full", "yolo", "ml", "ml-full", "classic"];
 const DET_KEY = "openpokescan.det";
 
-// Variante do detector para testar no celular: ?det=ml|ml-full|classic|classic-full|yolo
+// Variante do detector para testar no celular: ?det=hybrid|classic-full|yolo|ml|ml-full|classic
 // na URL (fica salvo no aparelho); sem nada, usa o último escolhido ou
-// "classic-full". Teste no celular em 2026-09-29 (23 scans da mesma carta na
+// "hybrid". Teste no celular em 2026-09-29 (23 scans da mesma carta na
 // mão): classic-full acertou 3/5, ml 2/10, ml-full 0/4. O ML desenha o melhor
 // contorno, mas põe os cantos por dentro da carta e corta a borda e o rodapé.
 function readDetMode(): DetMode {
@@ -63,8 +64,8 @@ function readDetMode(): DetMode {
     const q = new URLSearchParams(location.search).get("det") as DetMode | null;
     if (q && DET_MODES.includes(q)) localStorage.setItem(DET_KEY, q);
     const saved = localStorage.getItem(DET_KEY) as DetMode | null;
-    return saved && DET_MODES.includes(saved) ? saved : "classic-full";
-  } catch { return "classic-full"; }
+    return saved && DET_MODES.includes(saved) ? saved : "hybrid";
+  } catch { return "hybrid"; }
 }
 // Lado maior da foto nítida (takePhoto) usada para os recortes.
 const SHOT_MAX_DIM = 2400;
@@ -125,7 +126,7 @@ export class Scanner {
   ) {
     this.ro = new ResizeObserver(() => { this.coordsDirty = true; });
     import("scanic").then((m) => { this.scanic = m; document.body.classList.add("scanic-on"); this.renderDetBadge(); }).catch(() => {});
-    if (this.detMode === "yolo") preloadYolo();
+    if (this.detMode === "yolo" || this.detMode === "hybrid") preloadYolo();
   }
 
   get slingMode(): boolean {
@@ -412,34 +413,34 @@ export class Scanner {
   //   clássico no centro          7 certos / 1 errado,  33 ms
   //   ML no centro               12 certos / 0 errados, 15 ms
   // Devolve os cantos crus em px do quadro, ou null.
-  private async detectCenter(src: CanvasImageSource, vw: number, vh: number, canvas: HTMLCanvasElement): Promise<Q.Quad | null> {
+  private async detectCenter(src: CanvasImageSource, vw: number, vh: number, canvas: HTMLCanvasElement, mode: Detector, onCapture = false): Promise<Q.Quad | null> {
     const t0 = performance.now();
     // O YOLO foi treinado com a carta no meio de fundos variados: vê o quadro todo.
-    const full = this.detMode.endsWith("-full") || this.detMode === "yolo";
+    const full = mode.endsWith("-full") || mode === "yolo";
     const [a, b, c, d] = full ? [0, 0, 1, 1] : QUAD_CROP;
     const cx = a * vw, cy = b * vh, cw = (c - a) * vw, ch = (d - b) * vh;
     const s2 = QUAD_PROXY_DIM / Math.max(cw, ch);
     const w = Math.round(cw * s2), h = Math.round(ch * s2);
     if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
     canvas.getContext("2d", { willReadFrequently: true })!.drawImage(src, cx, cy, cw, ch, 0, 0, w, h);
-    if (this.detMode === "yolo") {
+    if (mode === "yolo") {
       const y = await detectYolo(canvas);
       if (!y) return null;
-      this.noteDetMs(performance.now() - t0);
+      this.noteDetMs(performance.now() - t0, onCapture);
       if (y.score < YOLO_MIN_SCORE) return null;
       const out = {} as Q.Quad;
       for (const k of ["topLeft", "topRight", "bottomRight", "bottomLeft"] as const)
         out[k] = { x: cx + y[k].x / s2, y: cy + y[k].y / s2 };
       return out;
     }
-    const ml = this.detMode.startsWith("ml");
+    const ml = mode.startsWith("ml");
     let r = await this.scanic!.scanDocument(canvas, ml
       ? { mode: "detect", detector: "ml", maxProcessingDimension: QUAD_PROXY_DIM }
       : { mode: "detect", maxProcessingDimension: QUAD_PROXY_DIM });
     // A rede sempre prevê 4 cantos: carta real dá confiança 1.0 (13/13), jeans
     // 0.76, mesa vazia 0.001. Abaixo do corte, trata como "não achou".
     if (ml && r?.success && (r.confidence ?? 0) < ML_MIN_CONFIDENCE) r = { ...r, success: false };
-    this.noteDetMs(performance.now() - t0);
+    this.noteDetMs(performance.now() - t0, onCapture);
     if (!(r?.success && r.corners)) return null;
     const out = {} as Q.Quad;
     for (const k of ["topLeft", "topRight", "bottomRight", "bottomLeft"] as const)
@@ -455,8 +456,23 @@ export class Scanner {
   /** Moving average of the detector time per call, in ms. */
   detMs = 0;
 
-  private noteDetMs(ms: number): void {
-    this.detMs = this.detMs ? this.detMs * 0.8 + ms * 0.2 : ms;
+  // hybrid: o overlay usa a CV clássica leve (roda a cada ~200ms) e o YOLO
+  // (~400ms no celular) roda UMA vez, na foto capturada, para os cantos do
+  // recorte. Contínuo, o YOLO deixava o contorno atrasado na mão.
+  private trackDetector(): Detector {
+    return this.detMode === "hybrid" ? "classic-full" : this.detMode;
+  }
+
+  private captureDetector(): Detector {
+    return this.detMode === "hybrid" ? "yolo" : this.detMode;
+  }
+
+  /** Detector time on the last captured photo, in ms. */
+  capDetMs = 0;
+
+  private noteDetMs(ms: number, onCapture: boolean): void {
+    if (onCapture) this.capDetMs = ms;
+    else this.detMs = this.detMs ? this.detMs * 0.8 + ms * 0.2 : ms;
     this.renderDetBadge();
   }
 
@@ -472,12 +488,14 @@ export class Scanner {
         this.detMode = DET_MODES[(DET_MODES.indexOf(this.detMode) + 1) % DET_MODES.length];
         try { localStorage.setItem(DET_KEY, this.detMode); } catch { /* sem storage: vale só nesta sessão */ }
         this.detMs = 0;   // a média era do detector anterior
-        if (this.detMode === "yolo") preloadYolo();
+        this.capDetMs = 0;
+        if (this.detMode === "yolo" || this.detMode === "hybrid") preloadYolo();
         this.renderDetBadge();
       };
       document.body.appendChild(this.detBadge);
     }
-    this.detBadge.textContent = `det: ${this.detMode}${this.detMs ? ` · ${Math.round(this.detMs)} ms` : ""} ⟳`;
+    const cap = this.capDetMs ? ` · foto ${Math.round(this.capDetMs)} ms` : "";
+    this.detBadge.textContent = `det: ${this.detMode}${this.detMs ? ` · ${Math.round(this.detMs)} ms` : ""}${cap} ⟳`;
   }
   private detBadge: HTMLButtonElement | null = null;
 
@@ -496,7 +514,7 @@ export class Scanner {
       if (!this.quadCropCanvas) this.quadCropCanvas = document.createElement("canvas");
       // Cantos em px do quadro → espaço de rastreio (quadro inteiro reduzido): filtro,
       // suavização, disparo e retícula continuam iguais.
-      const fc = await this.detectCenter(this.video, vw, vh, this.quadCropCanvas);
+      const fc = await this.detectCenter(this.video, vw, vh, this.quadCropCanvas, this.trackDetector());
       if (this.capturing) return;
       const ordered = fc ? Q.inset(Q.order(Q.scale(fc, s))) : null;
       if (!ordered || !Q.isSane(ordered, pw, ph)) {
@@ -597,7 +615,7 @@ export class Scanner {
     let use = quad;
     let backup: Q.Quad | null = null;
     try {
-      const fc = await this.detectCenter(full, full.width, full.height, document.createElement("canvas"));
+      const fc = await this.detectCenter(full, full.width, full.height, document.createElement("canvas"), this.captureDetector(), true);
       if (fc) {
         const fresh = Q.inset(Q.order(fc));
         if (Q.isSane(fresh, full.width, full.height)) { backup = quad; use = fresh; }
@@ -693,6 +711,15 @@ export class Scanner {
     const src = shot.canvas, k = shot.k;
     let photo: HTMLCanvasElement | null = null;
     let preCropped = false;
+    // hybrid/yolo sem contorno rastreado (mão tapando a borda, fundo claro): o
+    // YOLO ainda acha a carta na foto, então é ele que dá o contorno do recorte.
+    if (!quad && this.captureDetector() === "yolo") {
+      try {
+        const fc = await this.detectCenter(src, src.width, src.height, document.createElement("canvas"), "yolo", true);
+        const q = fc ? Q.inset(Q.order(fc)) : null;
+        if (q && Q.isSane(q, src.width, src.height)) quad = Q.scale(q, 1 / k);
+      } catch { /* segue sem contorno */ }
+    }
     if (quad) {
       let drop: Q.Quad | null = null;
       try { ({ photo, drop } = await this.warp(src, Q.scale(quad, k))); } catch { photo = null; }
