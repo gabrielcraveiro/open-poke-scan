@@ -14,7 +14,10 @@ type Scanic = typeof import("scanic");
 /** Callbacks from the scanner to the UI. */
 export interface ScannerHooks {
   status(msg: string): void;
-  /** A capture started. `photo` is the image sent to the server. */
+  /**
+   * A capture started or its crop is ready. Handheld: called first with a quick
+   * preview cut from the video, then with `photo`, the image sent to the server.
+   */
   captured(photo: HTMLCanvasElement): void;
   /** Recognition finished. `result` is null on error or no match. */
   result(result: Recognition | null, photo: HTMLCanvasElement): void;
@@ -180,6 +183,7 @@ export class Scanner {
 
   /** Resume after a handheld result was closed. */
   resume(): void {
+    this.video.play().catch(() => {});   // descongela a imagem do disparo
     this.paused = false;
     this.capturing = false;
     this.stable = 0;
@@ -596,6 +600,26 @@ export class Scanner {
     return norm;
   }
 
+  // Prévia instantânea do disparo: a caixa do contorno rastreado (ou a retícula)
+  // recortada do quadro do vídeo, reduzida. Só para a tela; não vai ao servidor.
+  private quickPreview(quad?: Q.Quad): HTMLCanvasElement | null {
+    const v = this.video;
+    if (!v.videoWidth || !this.coords) return null;
+    let x: number, y: number, w: number, h: number;
+    if (quad) {
+      ({ x, y, w, h } = Q.bbox(quad, v.videoWidth, v.videoHeight, 0.04));
+    } else {
+      ({ px: x, py: y, pw: w, ph: h } = this.coords);
+    }
+    if (w < 20 || h < 20) return null;
+    const s = Math.min(1, 480 / Math.max(w, h));
+    const c = document.createElement("canvas");
+    c.width = Math.round(w * s);
+    c.height = Math.round(h * s);
+    c.getContext("2d")!.drawImage(v, x, y, w, h, 0, 0, c.width, c.height);
+    return c;
+  }
+
   /**
    * Sharp photo of the capture moment, in the video's field of view.
    * Uses ImageCapture.takePhoto() (refocus, full resolution) cropped to the
@@ -644,6 +668,18 @@ export class Scanner {
     if (this.sling) {
       this.lastAddData = this.lastData;
       this.movedSince = false;
+    } else {
+      // Resposta imediata: a foto nítida + o YOLO + o servidor levam ~2s, e sem
+      // nada na tela o disparo parecia não ter acontecido ("lag quando
+      // identifica"). Congela a imagem, vibra e já mostra a carta recortada do
+      // vídeo; o recorte final troca a prévia quando fica pronto. No sling o
+      // vídeo segue contínuo (esteira).
+      navigator.vibrate?.(15);
+      this.frame.classList.add("is-locked");
+      setTimeout(() => this.frame.classList.remove("is-locked"), 400);
+      this.video.pause();
+      const preview = this.quickPreview(quad);
+      if (preview) this.hooks.captured(preview);
     }
     // Todos os recortes saem da foto nítida (ver sharpFrame); `quad` e o
     // retângulo da retícula estão em px do vídeo, então escalam por `k`.
@@ -688,10 +724,13 @@ export class Scanner {
       photo.height = Math.max(1, Math.round(ph * k));
       photo.getContext("2d")!.drawImage(src, px * k, py * k, pw * k, ph * k, 0, 0, photo.width, photo.height);
     }
-    navigator.vibrate?.(15);
-    this.frame.classList.add("is-locked");
-    setTimeout(() => this.frame.classList.remove("is-locked"), 400);
-    if (!this.sling) this.paused = true;
+    if (this.sling) {
+      navigator.vibrate?.(15);
+      this.frame.classList.add("is-locked");
+      setTimeout(() => this.frame.classList.remove("is-locked"), 400);
+    } else {
+      this.paused = true;
+    }
     this.hooks.captured(photo);
     this.setStatus("Identificando carta…");
     let res: Recognition | null = null;

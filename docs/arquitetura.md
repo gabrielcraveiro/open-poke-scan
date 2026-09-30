@@ -43,7 +43,7 @@ O site não tem banco, login nem backend próprio. Tudo que ele guarda (a lista 
    - A carta é recortada com correção de perspectiva e reamostrada para 63:88. A retícula mostra o contorno do corte.
    - Se o recorte sai com proporção fora de 0,62–0,85, tenta o contorno da retícula. Se também falhar, vale a caixa do contorno com 6% de folga, e o servidor acha a carta lá dentro. O corte fixo da retícula só entra sem contorno nenhum.
 5. **Reconhecimento.** A carta vai em JPEG de até 900px com `pre=1`, mais o rodapé (28% de baixo) em resolução cheia no campo `footer`, para o OCR ler o número.
-6. **Resultado.** Modo normal: tela com a carta, o preço, as alternativas e os links. Modo sling: entra direto na lista, se o servidor estiver confiante. Quadro sem carta (`not_card`): aviso e volta para a câmera.
+6. **Resultado.** No disparo com a carta na mão, a imagem congela e a prévia da carta aparece na hora, antes da foto nítida e do servidor (~2s). Servidor confiante: tela com a carta, o preço, as alternativas e os links. Sem confiança: "Qual destas é a sua?", com as 6 candidatas grandes e o set em destaque quando há nomes repetidos (mesma arte em outro set); um toque escolhe. Modo sling: entra direto na lista, se o servidor estiver confiante. Quadro sem carta (`not_card`): aviso e volta para a câmera.
 
 ## Decisões
 
@@ -126,6 +126,7 @@ Na Vercel, `VITE_RECOGNIZE_URL` e `VITE_TELEMETRY_URL` estão definidas em Produ
 | 2026-09-29 | Contorno deitado descartado; "Escanear outra" registra `skip`, separado de "não é essa". |
 | 2026-09-29 | Ordem de cantos e filtro do contorno voltam ao original (as mudanças acima pioraram a carta na mão). Foto nítida do `takePhoto`, rodapé em alta resolução para o OCR. |
 | 2026-09-30 | Lente com foco automático; YOLO de cantos na foto capturada; modos de teste do detector removidos. |
+| 2026-09-30 | Prévia instantânea no disparo; escolha entre as candidatas quando o servidor não está confiante. |
 | 2026-09-28 | Telemetria anônima (só na versão publicada). |
 | 2026-09-28 | `server/` para rodar o reconhecimento do zero. |
 | 2026-09-28 | Só preço em real (sem EUR/USD). |

@@ -147,9 +147,63 @@ function fillSheet(card: Card, rec: Recognition): void {
 
 function showSheet(rec: Recognition): void {
   current = rec;
+  if (!rec.confident && rec.candidates.length > 1) showPick(rec);
+  else showResult(rec);
+  sheet.hidden = false;
+}
+
+function setPickMode(on: boolean): void {
+  $("sheet-pick").hidden = !on;
+  $("sheet-body").hidden = on;
+  $("add-btn").hidden = on;
+  if (on) $("sheet-alts").hidden = true;
+  $("wrong-btn").textContent = on ? "Não é nenhuma" : "Não é essa";
+  sheet.setAttribute("aria-labelledby", on ? "pick-title" : "sheet-title");
+}
+
+function showResult(rec: Recognition): void {
+  setPickMode(false);
   fillSheet(rec.card, rec);
   renderAlternatives(rec);
-  sheet.hidden = false;
+}
+
+const nameKey = (c: Card) => c.name.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+// Servidor sem confiança: nos erros de 2026-09-30 a carta certa estava quase
+// sempre entre a 2ª e a 4ª. Em vez de mostrar a 1ª com "confira se é essa", a
+// folha pede para escolher entre as candidatas, com um toque.
+function showPick(rec: Recognition): void {
+  setPickMode(true);
+  const cands = rec.candidates.slice(0, 6);
+  const count = new Map<string, number>();
+  for (const c of cands) count.set(nameKey(c), (count.get(nameKey(c)) ?? 0) + 1);
+  const grid = $("pick-grid");
+  grid.replaceChildren(...cands.map((c, rank) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "pick-card";
+    const img = document.createElement("img");
+    img.src = cardImage(c);
+    img.alt = "";
+    const name = document.createElement("strong");
+    name.textContent = c.name;
+    const set = document.createElement("span");
+    // Mesmo nome em mais de uma candidata = mesma arte em outro set: o set é o
+    // que diferencia, então ganha destaque.
+    set.className = (count.get(nameKey(c)) ?? 0) > 1 ? "pick-set emph" : "pick-set";
+    set.textContent = c.set_name;
+    const num = document.createElement("span");
+    num.className = "pick-code";
+    num.textContent = code(c);
+    b.append(img, name, set, num);
+    b.onclick = () => {
+      track("alt_pick", { from: rec.card.api_id, to: c.api_id, rank, via: "pick" });
+      const picked: Recognition = { ...rec, card: c, numberMatch: false, confident: true };
+      current = picked;
+      showResult({ ...picked, candidates: [c, ...rec.candidates.filter((x) => x.api_id !== c.api_id)] });
+    };
+    return b;
+  }));
 }
 
 function hideSheet(): void {

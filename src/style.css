@@ -115,6 +115,18 @@ body.sling-on .shutter { display: none; }
 .alts p { grid-column: 1 / -1; margin: 0; }
 .alt { display: flex; flex-direction: column; gap: .2rem; padding: .3rem; font-size: .7rem; text-align: center; }
 .alt img { width: 100%; border-radius: 4px; }
+/* Modo escolha: o servidor não está confiante. As candidatas ficam grandes, com
+   set e número em destaque, porque é isso que separa a mesma arte em sets
+   diferentes. */
+.pick h2 { margin: .2rem 0; font-size: 1.15rem; }
+.pick p { margin: 0 0 .7rem; }
+.pick-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: .5rem; }
+.pick-card { display: flex; flex-direction: column; gap: .15rem; padding: .35rem; text-align: left; font-size: .72rem; line-height: 1.25; }
+.pick-card img { width: 100%; aspect-ratio: 63 / 88; object-fit: contain; border-radius: 6px; background: #000; margin-bottom: .2rem; }
+.pick-card strong { font-size: .8rem; }
+.pick-set { color: var(--muted); }
+.pick-set.emph { color: var(--accent); font-weight: 600; }
+.pick-code { font-weight: 700; font-variant-numeric: tabular-nums; }
 
 .drawer {
   position: fixed; inset: 0; background: var(--bg); display: flex; flex-direction: column;

@@ -40,7 +40,12 @@
       </footer>
 
       <div id="sheet" class="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="sheet-title">
-        <div class="sheet-body">
+        <div id="sheet-pick" class="pick" hidden>
+          <h2 id="pick-title">Qual destas é a sua?</h2>
+          <p class="muted small">Toque na carta certa.</p>
+          <div id="pick-grid" class="pick-grid"></div>
+        </div>
+        <div id="sheet-body" class="sheet-body">
           <img id="sheet-img" class="sheet-img" alt="" />
           <div class="sheet-info">
             <h2 id="sheet-title"></h2>
