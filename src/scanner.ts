@@ -494,8 +494,8 @@ export class Scanner {
       };
       document.body.appendChild(this.detBadge);
     }
-    const cap = this.capDetMs ? ` · foto ${Math.round(this.capDetMs)} ms` : "";
-    this.detBadge.textContent = `det: ${this.detMode}${this.detMs ? ` · ${Math.round(this.detMs)} ms` : ""}${cap} ⟳`;
+    const ms = [this.detMs, this.capDetMs].filter(Boolean).map(Math.round).join("/");
+    this.detBadge.textContent = `${this.detMode}${ms ? ` ${ms} ms` : ""} ⟳`;
   }
   private detBadge: HTMLButtonElement | null = null;
 
@@ -576,19 +576,26 @@ export class Scanner {
     this.raf = requestAnimationFrame(loop);
   }
 
-  private drawReticle(): void {
+  // `final`: contorno do recorte (em px do vídeo). Desenha sem suavizar, para a
+  // tela mostrar exatamente o que vai para o servidor.
+  private drawReticle(final?: Q.Quad): void {
     const v = this.video;
     if (!this.scanic || !v.videoWidth || !this.coords) return;
     let target: Q.Quad;
     let tracking = false;
-    if (this.quadLast && this.quadMiss === 0 && this.quadProxy) {
+    if (final) {
+      target = final;
+      tracking = true;
+    } else if (this.quadLast && this.quadMiss === 0 && this.quadProxy) {
       target = Q.scale(this.quadLast, v.videoWidth / this.quadProxy.width);
       tracking = true;
     } else {
       const { px, py, pw, ph } = this.coords;
       target = Q.fromRect(px, py, pw, ph);
     }
-    this.reticle = this.reticle ? Q.lerp(this.reticle, target, 0.18) : target;
+    // 0.35 por quadro: com a detecção a cada ~250ms no celular, 0.18 deixava o
+    // contorno sempre atrás da carta.
+    this.reticle = this.reticle && !final ? Q.lerp(this.reticle, target, 0.35) : target;
     const vw = v.videoWidth, vh = v.videoHeight, ew = v.clientWidth, eh = v.clientHeight;
     const s = Math.max(ew / vw, eh / vh);
     const cropX = (vw - ew / s) / 2, cropY = (vh - eh / s) / 2;
@@ -604,10 +611,11 @@ export class Scanner {
   /**
    * Perspective-corrected photo of the card inside `quad`.
    * Returns the photo, or `drop` (the quad to fall back to) when no warp is plausible.
+   * `used` is the quad of the photo, in photo pixels.
    */
-  private async warp(full: HTMLCanvasElement, quad: Q.Quad): Promise<{ photo: HTMLCanvasElement | null; drop: Q.Quad | null }> {
+  private async warp(full: HTMLCanvasElement, quad: Q.Quad): Promise<{ photo: HTMLCanvasElement | null; drop: Q.Quad | null; used: Q.Quad }> {
     const scanic = this.scanic;
-    if (!scanic) return { photo: null, drop: null };
+    if (!scanic) return { photo: null, drop: null, used: quad };
     // Re-detecta NA PRÓPRIA FOTO: os cantos são do mesmo instante dela (a mão
     // mexe durante o refoco do takePhoto). O contorno rastreado — em escala da
     // foto — fica de reserva se o warp novo falhar. (Uma guarda que preferia o
@@ -623,7 +631,7 @@ export class Scanner {
     } catch { /* fica com o quad anterior */ }
     let photo = await this.warpOne(full, use);
     if (!photo && backup) { photo = await this.warpOne(full, backup); if (photo) use = backup; }
-    return { photo, drop: photo ? null : use };
+    return { photo, drop: photo ? null : use, used: use };
   }
 
   private async warpOne(full: HTMLCanvasElement, quad: Q.Quad): Promise<HTMLCanvasElement | null> {
@@ -722,7 +730,9 @@ export class Scanner {
     }
     if (quad) {
       let drop: Q.Quad | null = null;
-      try { ({ photo, drop } = await this.warp(src, Q.scale(quad, k))); } catch { photo = null; }
+      let used: Q.Quad | null = null;
+      try { ({ photo, drop, used } = await this.warp(src, Q.scale(quad, k))); } catch { photo = null; }
+      if (photo && used) this.drawReticle(Q.scale(used, 1 / k));
       preCropped = !!photo;
       // Warp descartado: a carta está DENTRO do contorno que o usuário vê, não
       // necessariamente no corte fixo (que cortava as laterais de carta grande).
