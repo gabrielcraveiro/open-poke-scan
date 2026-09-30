@@ -115,7 +115,7 @@ export class Scanner {
     private readonly hooks: ScannerHooks,
   ) {
     this.ro = new ResizeObserver(() => { this.coordsDirty = true; });
-    import("scanic").then((m) => { this.scanic = m; document.body.classList.add("scanic-on"); }).catch(() => {});
+    import("scanic").then((m) => { this.scanic = m; document.body.classList.add("scanic-on"); this.renderDetBadge(); }).catch(() => {});
   }
 
   get slingMode(): boolean {
@@ -424,21 +424,35 @@ export class Scanner {
     return out;
   }
 
-  /** Detector variant, from ?det= (saved in localStorage): ml (default), ml-full, classic, classic-full. */
-  readonly detMode: DetMode = readDetMode();
+  /** Detector variant, from ?det= or the badge button (saved in localStorage): ml (default), ml-full, classic, classic-full. */
+  detMode: DetMode = readDetMode();
   /** Moving average of the detector time per call, in ms. */
   detMs = 0;
 
   private noteDetMs(ms: number): void {
     this.detMs = this.detMs ? this.detMs * 0.8 + ms * 0.2 : ms;
+    this.renderDetBadge();
+  }
+
+  // Botão para trocar de detector sem mexer na URL: cada toque passa para a
+  // próxima variante, aplica na hora e salva no aparelho.
+  private renderDetBadge(): void {
     if (!this.detBadge) {
-      this.detBadge = document.createElement("div");
+      this.detBadge = document.createElement("button");
+      this.detBadge.type = "button";
       this.detBadge.className = "det-badge";
+      this.detBadge.title = "Trocar o detector de contorno";
+      this.detBadge.onclick = () => {
+        this.detMode = DET_MODES[(DET_MODES.indexOf(this.detMode) + 1) % DET_MODES.length];
+        try { localStorage.setItem(DET_KEY, this.detMode); } catch { /* sem storage: vale só nesta sessão */ }
+        this.detMs = 0;   // a média era do detector anterior
+        this.renderDetBadge();
+      };
       document.body.appendChild(this.detBadge);
     }
-    this.detBadge.textContent = `det: ${this.detMode} · ${Math.round(this.detMs)} ms`;
+    this.detBadge.textContent = `det: ${this.detMode}${this.detMs ? ` · ${Math.round(this.detMs)} ms` : ""} ⟳`;
   }
-  private detBadge: HTMLDivElement | null = null;
+  private detBadge: HTMLButtonElement | null = null;
 
   private async quadTick(): Promise<void> {
     const scanic = this.scanic;

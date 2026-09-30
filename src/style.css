@@ -134,10 +134,10 @@ body.sling-on .shutter { display: none; }
   background: #fff; color: #111; padding: .55rem 1rem; border-radius: 999px; font-size: .88rem; max-width: 92vw; text-align: center;
 }
 
-/* Selinho do detector ativo (?det=) e do tempo médio por detecção: serve para
-   comparar as variantes no celular. Não recebe toque. */
+/* Botão do detector ativo e do tempo médio por detecção: um toque troca a
+   variante, para comparar no celular sem mexer na URL. */
 .det-badge {
   position: fixed; left: 8px; bottom: calc(env(safe-area-inset-bottom) + 8px); z-index: 50;
-  padding: 2px 8px; border-radius: 999px; pointer-events: none;
-  font: 600 11px/1.6 ui-monospace, monospace; color: #fff; background: rgba(0, 0, 0, .55);
+  min-height: 32px; padding: 4px 12px; border: 1px solid rgba(255, 255, 255, .25); border-radius: 999px;
+  font: 600 12px/1.4 ui-monospace, monospace; color: #fff; background: rgba(0, 0, 0, .65); cursor: pointer;
 }
