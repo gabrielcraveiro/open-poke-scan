@@ -612,8 +612,9 @@ export class Scanner {
    * Perspective-corrected photo of the card inside `quad`.
    * Returns the photo, or `drop` (the quad to fall back to) when no warp is plausible.
    * `used` is the quad of the photo, in photo pixels.
+   * `detected`: corners already found on this photo (skips a second detector run).
    */
-  private async warp(full: HTMLCanvasElement, quad: Q.Quad): Promise<{ photo: HTMLCanvasElement | null; drop: Q.Quad | null; used: Q.Quad }> {
+  private async warp(full: HTMLCanvasElement, quad: Q.Quad, detected?: Q.Quad | null): Promise<{ photo: HTMLCanvasElement | null; drop: Q.Quad | null; used: Q.Quad }> {
     const scanic = this.scanic;
     if (!scanic) return { photo: null, drop: null, used: quad };
     // Re-detecta NA PRÓPRIA FOTO: os cantos são do mesmo instante dela (a mão
@@ -623,7 +624,8 @@ export class Scanner {
     let use = quad;
     let backup: Q.Quad | null = null;
     try {
-      const fc = await this.detectCenter(full, full.width, full.height, document.createElement("canvas"), this.captureDetector(), true);
+      const fc = detected !== undefined ? detected
+        : await this.detectCenter(full, full.width, full.height, document.createElement("canvas"), this.captureDetector(), true);
       if (fc) {
         const fresh = Q.inset(Q.order(fc));
         if (Q.isSane(fresh, full.width, full.height)) { backup = quad; use = fresh; }
@@ -721,9 +723,11 @@ export class Scanner {
     let preCropped = false;
     // hybrid/yolo sem contorno rastreado (mão tapando a borda, fundo claro): o
     // YOLO ainda acha a carta na foto, então é ele que dá o contorno do recorte.
+    // `detected` evita rodar o YOLO de novo na mesma foto dentro do warp().
+    let detected: Q.Quad | null | undefined;
     if (!quad && this.captureDetector() === "yolo") {
       try {
-        const fc = await this.detectCenter(src, src.width, src.height, document.createElement("canvas"), "yolo", true);
+        const fc = detected = await this.detectCenter(src, src.width, src.height, document.createElement("canvas"), "yolo", true);
         const q = fc ? Q.inset(Q.order(fc)) : null;
         if (q && Q.isSane(q, src.width, src.height)) quad = Q.scale(q, 1 / k);
       } catch { /* segue sem contorno */ }
@@ -731,7 +735,7 @@ export class Scanner {
     if (quad) {
       let drop: Q.Quad | null = null;
       let used: Q.Quad | null = null;
-      try { ({ photo, drop, used } = await this.warp(src, Q.scale(quad, k))); } catch { photo = null; }
+      try { ({ photo, drop, used } = await this.warp(src, Q.scale(quad, k), detected)); } catch { photo = null; }
       if (photo && used) this.drawReticle(Q.scale(used, 1 / k));
       preCropped = !!photo;
       // Warp descartado: a carta está DENTRO do contorno que o usuário vê, não
