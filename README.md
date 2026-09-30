@@ -63,6 +63,7 @@ O `dist/` é estático e roda em qualquer host (Vercel, Netlify, GitHub Pages, C
 
 - `file`: JPEG da carta (lado maior até 1280px).
 - `pre`: `1` quando a imagem já é só a carta recortada. Sem ele, o servidor detecta a carta na foto.
+- `footer` (opcional, só com `pre=1`): JPEG dos 28% de baixo da mesma carta, em resolução cheia (até 1200px de largura). O servidor lê o número da carta nesta imagem. No `file` reduzido, o número tem ~12px e o OCR não lê.
 
 Resposta:
 
@@ -88,6 +89,7 @@ A versão publicada coleta telemetria anônima para medir o acerto do scanner: u
 ## Créditos
 
 - Detecção de cantos: [scanic](https://github.com/marquaye/scanic) (MIT).
+- Modo de detecção opcional `yolo`: modelo [duclvQ/tcg-card-detector](https://huggingface.co/duclvQ/tcg-card-detector) (YOLOv8-pose, AGPL-3.0). O site baixa o modelo do Hugging Face só quando você escolhe esse modo. O modelo não faz parte deste repositório.
 - Dados, imagens e preços de referência: [TCGdex](https://tcgdex.dev).
 - Pokémon e as imagens das cartas são marcas e propriedade de Nintendo, Creatures, GAME FREAK e The Pokémon Company. Este projeto não tem vínculo com elas.
 - Nasceu do scanner do CartinhasDaJu, um app pessoal de coleção.

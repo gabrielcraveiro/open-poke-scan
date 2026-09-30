@@ -6,6 +6,7 @@
 import * as Q from "./quad";
 import { frameDiff, glare, presence, sharpness } from "./pixels";
 import { recognize, type Recognition } from "./recognize";
+import { detectYolo, preloadYolo, YOLO_MIN_SCORE } from "./yolo";
 
 type Scanic = typeof import("scanic");
 
@@ -47,11 +48,11 @@ const ML_MIN_CONFIDENCE = 0.9;
 // para fora a partir do centro; o inset() de 2% do rastreio vem depois.
 const ML_GROW = 0.08;
 
-type DetMode = "ml" | "ml-full" | "classic" | "classic-full";
-const DET_MODES: readonly DetMode[] = ["ml", "ml-full", "classic", "classic-full"];
+type DetMode = "ml" | "ml-full" | "classic" | "classic-full" | "yolo";
+const DET_MODES: readonly DetMode[] = ["ml", "ml-full", "classic", "classic-full", "yolo"];
 const DET_KEY = "openpokescan.det";
 
-// Variante do detector para testar no celular: ?det=ml|ml-full|classic|classic-full
+// Variante do detector para testar no celular: ?det=ml|ml-full|classic|classic-full|yolo
 // na URL (fica salvo no aparelho); sem nada, usa o último escolhido ou
 // "classic-full". Teste no celular em 2026-09-29 (23 scans da mesma carta na
 // mão): classic-full acertou 3/5, ml 2/10, ml-full 0/4. O ML desenha o melhor
@@ -123,6 +124,7 @@ export class Scanner {
   ) {
     this.ro = new ResizeObserver(() => { this.coordsDirty = true; });
     import("scanic").then((m) => { this.scanic = m; document.body.classList.add("scanic-on"); this.renderDetBadge(); }).catch(() => {});
+    if (this.detMode === "yolo") preloadYolo();
   }
 
   get slingMode(): boolean {
@@ -409,13 +411,24 @@ export class Scanner {
   // Devolve os cantos crus em px do quadro, ou null.
   private async detectCenter(src: CanvasImageSource, vw: number, vh: number, canvas: HTMLCanvasElement): Promise<Q.Quad | null> {
     const t0 = performance.now();
-    const full = this.detMode.endsWith("-full");
+    // O YOLO foi treinado com a carta no meio de fundos variados: vê o quadro todo.
+    const full = this.detMode.endsWith("-full") || this.detMode === "yolo";
     const [a, b, c, d] = full ? [0, 0, 1, 1] : QUAD_CROP;
     const cx = a * vw, cy = b * vh, cw = (c - a) * vw, ch = (d - b) * vh;
     const s2 = QUAD_PROXY_DIM / Math.max(cw, ch);
     const w = Math.round(cw * s2), h = Math.round(ch * s2);
     if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
     canvas.getContext("2d", { willReadFrequently: true })!.drawImage(src, cx, cy, cw, ch, 0, 0, w, h);
+    if (this.detMode === "yolo") {
+      const y = await detectYolo(canvas);
+      if (!y) return null;
+      this.noteDetMs(performance.now() - t0);
+      if (y.score < YOLO_MIN_SCORE) return null;
+      const out = {} as Q.Quad;
+      for (const k of ["topLeft", "topRight", "bottomRight", "bottomLeft"] as const)
+        out[k] = { x: cx + y[k].x / s2, y: cy + y[k].y / s2 };
+      return out;
+    }
     const ml = this.detMode.startsWith("ml");
     let r = await this.scanic!.scanDocument(canvas, ml
       ? { mode: "detect", detector: "ml", maxProcessingDimension: QUAD_PROXY_DIM }
@@ -431,7 +444,7 @@ export class Scanner {
     return ml ? Q.inset(out, -ML_GROW) : out;
   }
 
-  /** Detector variant, from ?det= or the badge button (saved in localStorage): ml, ml-full, classic, classic-full (default). */
+  /** Detector variant, from ?det= or the badge button (saved in localStorage): ml, ml-full, classic, classic-full (default), yolo. */
   detMode: DetMode = readDetMode();
   /** Moving average of the detector time per call, in ms. */
   detMs = 0;
@@ -453,6 +466,7 @@ export class Scanner {
         this.detMode = DET_MODES[(DET_MODES.indexOf(this.detMode) + 1) % DET_MODES.length];
         try { localStorage.setItem(DET_KEY, this.detMode); } catch { /* sem storage: vale só nesta sessão */ }
         this.detMs = 0;   // a média era do detector anterior
+        if (this.detMode === "yolo") preloadYolo();
         this.renderDetBadge();
       };
       document.body.appendChild(this.detBadge);
