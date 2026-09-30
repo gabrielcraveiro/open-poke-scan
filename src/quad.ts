@@ -19,25 +19,18 @@ export function avgDelta(a: Quad, b: Quad): number {
 
 // Re-rotula os cantos por geometria: com a carta na diagonal os rótulos do
 // detector trocam entre frames, e um warp com rótulos trocados sai cisalhado.
-// Ordem cíclica pelo ângulo em torno do centro (nunca repete canto, nunca
-// espelha — os extremos de x±y antigos perdiam um canto perto de 45°); topo e
-// base = o par de lados MAIS HORIZONTAL, e topo = o de cima. Até 45° dá os
-// mesmos rótulos da versão original. A regra anterior ("lado curto em cima")
-// errava com a carta inclinada para trás na mão: a perspectiva encurta a
-// altura, um lado vertical virava "topo" e a retícula não travava. Acima de
-// 45° o contorno sai em paisagem e isSane() rejeita (vai pelo corte fixo).
+// Restaurado em 2026-09-29: as variantes de ordem cíclica deixaram a carta na
+// mão travando bem menos, e o sintético não reproduzia. Não troque sem medir.
 export function order(c: Quad): Quad {
   const pts = KEYS.map((k) => c[k]);
-  const cx = (pts[0].x + pts[1].x + pts[2].x + pts[3].x) / 4;
-  const cy = (pts[0].y + pts[1].y + pts[2].y + pts[3].y) / 4;
-  // y cresce para baixo: ângulo crescente = sentido horário na tela (TL→TR→BR→BL).
-  const cyc = pts.slice().sort((a, b) => Math.atan2(a.y - cy, a.x - cx) - Math.atan2(b.y - cy, b.x - cx));
-  const hor = (a: Point, b: Point) => Math.abs(b.x - a.x) - Math.abs(b.y - a.y);
-  const s = hor(cyc[0], cyc[1]) + hor(cyc[2], cyc[3]) >= hor(cyc[1], cyc[2]) + hor(cyc[3], cyc[0]) ? 0 : 1;
-  const midY = (i: number) => (cyc[i % 4].y + cyc[(i + 1) % 4].y) / 2;
-  const start = midY(s) <= midY(s + 2) ? s : s + 2;
-  const at = (i: number) => cyc[(start + i) % 4];
-  return { topLeft: at(0), topRight: at(1), bottomRight: at(2), bottomLeft: at(3) };
+  let tl = pts[0], br = pts[0], tr = pts[0], bl = pts[0];
+  for (const p of pts) {
+    if (p.x + p.y < tl.x + tl.y) tl = p;
+    if (p.x + p.y > br.x + br.y) br = p;
+    if (p.x - p.y > tr.x - tr.y) tr = p;
+    if (p.x - p.y < bl.x - bl.y) bl = p;
+  }
+  return { topLeft: tl, topRight: tr, bottomRight: br, bottomLeft: bl };
 }
 
 /** Axis-aligned box around the quad, grown by `pad` on each side and clamped to w×h. */
@@ -62,10 +55,9 @@ export function isSane(c: Quad, w: number, h: number): boolean {
   if (rH < 0.6 || rH > 1.67 || rV < 0.6 || rV > 1.67) return false;
   const avgW = (top + bottom) / 2, avgH = (left + right) / 2;
   const aspect = avgW / avgH;
-  // Só retrato: contorno em paisagem (topo/base = lados horizontais, ver
-  // order()) é região interna da carta — caixa de ataque, faixa do nome — cujo
-  // warp mandava meia carta de lado, ou carta inclinada mais de 45°.
-  if (aspect < 0.55 || aspect > 0.95) return false;
+  const portrait = aspect >= 0.55 && aspect <= 0.95;
+  const landscape = aspect >= 1.05 && aspect <= 1.82;
+  if (!portrait && !landscape) return false;
   const area = avgW * avgH;
   if (area < w * h * 0.015 || area > w * h * 0.95) return false;
   for (const k of KEYS) {
