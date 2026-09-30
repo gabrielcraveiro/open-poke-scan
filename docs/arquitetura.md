@@ -23,6 +23,8 @@ O site não tem banco, login nem backend próprio. Tudo que ele guarda (a lista 
 | `src/main.ts` | Liga a UI ao scanner: tela de resultado, alternativas, modo sling, lista, exportação, eventos. |
 | `src/scanner.ts` | Loop da câmera (tick de 150ms): retícula viva, gates de estabilidade e foco, captura, warp, edge-trigger do sling. |
 | `src/quad.ts` | Geometria do contorno da carta: ordenar cantos, rejeitar detecções absurdas, suavizar, desenhar. |
+| `src/yolo.ts` | Detector de cantos YOLOv8-pose, rodado uma vez na foto capturada. |
+| `src/camera.ts` | Escolha da lente traseira com foco automático, foco no centro e ajustes de câmera que mantêm a resolução. |
 | `src/pixels.ts` | Métricas baratas sobre o proxy de 160px: diferença entre frames, nitidez (Brenner), presença de carta, reflexo. |
 | `src/recognize.ts` | Cliente do `POST /recognize`: orçamento de tempo quente/frio, reenvio só em falha rápida, URL da imagem. |
 | `src/prices.ts` | Preço em R$ por carta, com cache em memória. |
@@ -33,15 +35,22 @@ O site não tem banco, login nem backend próprio. Tudo que ele guarda (a lista 
 
 ## Fluxo de um scan
 
-1. **Retícula viva.** A cada tick, o [scanic](https://github.com/marquaye/scanic) procura os 4 cantos da carta num proxy do frame inteiro. Um salto de posição só é aceito quando duas detecções seguidas confirmam o lugar novo, senão o contorno pularia para reflexos. Contorno deitado no quadro (lado curto de cima mais vertical que horizontal) é descartado: quase sempre é uma região interna da carta, como a caixa de ataque. Carta inclinada mais de 45° vai pelo corte fixo.
-2. **Gates.** A captura dispara quando a imagem fica parada e nítida: nitidez a 85% do pico visto, com o pico decaindo aos poucos para não travar em "Focando…". Se os gates nunca abrem (mão tremendo), dispara mesmo assim depois de 3s (2,5s no sling).
-3. **Corte.** Com o quad, a carta é recortada com correção de perspectiva e reamostrada para a proporção exata da carta (63:88).
-   - Re-detecta no frame exato da captura, mas só troca se o contorno novo estiver a menos de 8% da diagonal do que estava na tela. Com mão, capa ou pilha na cena, a re-detecção às vezes pega outro quadrilátero.
-   - Se o recorte sai com proporção fora de 0,62–0,85, tenta o contorno re-detectado. Se também falhar, vale a caixa do contorno com 6% de folga, e o servidor acha a carta lá dentro. O corte fixo da retícula só entra sem contorno nenhum.
-4. **Reconhecimento.** O JPEG (lado maior até 1280px) vai para o servidor com `pre=1` quando já é só a carta.
-5. **Resultado.** Modo normal: tela com a carta, o preço, as alternativas e os links. Modo sling: entra direto na lista, se o servidor estiver confiante. Quadro sem carta (`not_card`): aviso e volta para a câmera.
+1. **Câmera.** Abre a traseira em 1920×1440. Se o navegador informa que a lente não tem foco automático, troca para a traseira de menor número que tenha (em celular com várias lentes, o Chrome às vezes abre a grande-angular de foco fixo). Liga o foco contínuo no centro.
+2. **Retícula viva.** A cada ~200ms, o [scanic](https://github.com/marquaye/scanic) clássico procura os 4 cantos da carta num proxy de 480px do quadro inteiro. Um salto de posição só é aceito quando duas detecções seguidas confirmam o lugar novo, senão o contorno pularia para reflexos.
+3. **Gates.** A captura dispara quando o contorno fica parado e a imagem nítida: nitidez a 85% do pico visto, com o pico decaindo aos poucos para não travar em "Focando…". Se os gates nunca abrem (mão tremendo), dispara mesmo assim depois de 3s (2,5s no sling).
+4. **Foto e corte.** A foto sai do `takePhoto()` (até 2400px, no enquadramento do vídeo). No Firefox e no iOS, que não têm `ImageCapture`, sai do quadro do vídeo.
+   - O YOLO de cantos roda uma vez nessa foto e dá o contorno do corte, mesmo quando a retícula não travou. Enquanto o modelo baixa, vale o scanic clássico na foto.
+   - A carta é recortada com correção de perspectiva e reamostrada para 63:88. A retícula mostra o contorno do corte.
+   - Se o recorte sai com proporção fora de 0,62–0,85, tenta o contorno da retícula. Se também falhar, vale a caixa do contorno com 6% de folga, e o servidor acha a carta lá dentro. O corte fixo da retícula só entra sem contorno nenhum.
+5. **Reconhecimento.** A carta vai em JPEG de até 900px com `pre=1`, mais o rodapé (28% de baixo) em resolução cheia no campo `footer`, para o OCR ler o número.
+6. **Resultado.** Modo normal: tela com a carta, o preço, as alternativas e os links. Modo sling: entra direto na lista, se o servidor estiver confiante. Quadro sem carta (`not_card`): aviso e volta para a câmera.
 
 ## Decisões
+
+### Detector leve no overlay, YOLO só na foto
+O scanic clássico é rápido (~270ms no celular), mas escolhe o maior retângulo de bordas fortes e perde a carta com dedo no canto. O YOLO de cantos acha a borda externa quase sempre, mas leva ~400-1000ms por quadro no celular: contínuo, o contorno ficava para trás da mão. Então o clássico cuida da retícula e da estabilidade, e o YOLO roda uma vez, na foto (~600ms). No teste de 2026-09-30, 9 de 10 scans foram adicionados, sem nenhum "não é essa". O scanic ML (DocCornerNet) foi testado e descartado: põe os cantos para dentro da carta e corta a borda e o número.
+
+O modelo é o [duclvQ/tcg-card-detector](https://huggingface.co/duclvQ/tcg-card-detector) (AGPL-3.0), baixado do Hugging Face fixado num commit. Ele não faz parte deste repositório.
 
 ### Reconhecimento no servidor, não no navegador
 O modelo roda no navegador também (onnxruntime-web), e essa foi a primeira versão do scanner de origem. Rodar o DINOv2 no celular travava a tela e levava segundos por carta. No servidor quente, o scan leva ~0,35–0,5s. O custo é depender da rede e do servidor.
@@ -115,6 +124,8 @@ Na Vercel, `VITE_RECOGNIZE_URL` e `VITE_TELEMETRY_URL` estão definidas em Produ
 | 2026-09-28 | Preço em R$; "Não é essa" volta para a câmera; chamadas de preço pela mesma origem. |
 | 2026-09-29 | Cantos em ordem cíclica (carta em pé até ±85°), recorte 63:88, re-detecção só perto do contorno da tela, caixa do contorno como reserva, sling pelo `confident` do servidor, aviso de quadro sem carta. |
 | 2026-09-29 | Contorno deitado descartado; "Escanear outra" registra `skip`, separado de "não é essa". |
+| 2026-09-29 | Ordem de cantos e filtro do contorno voltam ao original (as mudanças acima pioraram a carta na mão). Foto nítida do `takePhoto`, rodapé em alta resolução para o OCR. |
+| 2026-09-30 | Lente com foco automático; YOLO de cantos na foto capturada; modos de teste do detector removidos. |
 | 2026-09-28 | Telemetria anônima (só na versão publicada). |
 | 2026-09-28 | `server/` para rodar o reconhecimento do zero. |
 | 2026-09-28 | Só preço em real (sem EUR/USD). |

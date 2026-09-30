@@ -62,7 +62,6 @@ const scanner = new Scanner(video, frame, quadSvg, {
       top: res?.candidates.map((c) => c.api_id) ?? [],
       ms: res?.ms ?? null,
       warm: isWarm(),
-      det: scanner.detMode,
       det_ms: Math.round(scanner.detMs),
       cap_det_ms: Math.round(scanner.capDetMs),
       cam: scanner.camInfo,

@@ -4,8 +4,9 @@
 // na borda externa, contra 12/13 do scanic ML (que põe os cantos para dentro).
 // Quadro vazio e jeans dão score 0.0; carta, ~0.97.
 //
-// Carrega só quando o modo "yolo" é escolhido: ~12.5 MB de modelo (fp32; o int8
-// desviava os cantos até 3% do quadro) + ~2.5 MB de WASM do onnxruntime-web.
+// Roda uma vez por captura, na foto (ver Scanner.detectPhoto). Baixa em segundo
+// plano ao abrir o site: ~12.5 MB de modelo (fp32; o int8 desviava os cantos
+// até 3% do quadro) + ~2.5 MB de WASM do onnxruntime-web.
 import type * as Ort from "onnxruntime-web";
 
 // Fixado no commit para o modelo não mudar por baixo do app.
