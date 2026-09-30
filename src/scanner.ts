@@ -42,20 +42,27 @@ const QUAD_PROXY_DIM = 480;
 const QUAD_CROP = [0.10, 0.12, 0.90, 0.88] as const;
 // Confiança mínima do modo ML (carta real = 1.0; jeans = 0.76).
 const ML_MIN_CONFIDENCE = 0.9;
+// O DocCornerNet foi treinado em documentos e põe os cantos ~3% para dentro da
+// carta (as fotos do teste saíam sem a borda e sem o número). Empurra os cantos
+// para fora a partir do centro; o inset() de 2% do rastreio vem depois.
+const ML_GROW = 0.08;
 
 type DetMode = "ml" | "ml-full" | "classic" | "classic-full";
 const DET_MODES: readonly DetMode[] = ["ml", "ml-full", "classic", "classic-full"];
 const DET_KEY = "openpokescan.det";
 
 // Variante do detector para testar no celular: ?det=ml|ml-full|classic|classic-full
-// na URL (fica salvo no aparelho); sem nada, usa o último escolhido ou "ml".
+// na URL (fica salvo no aparelho); sem nada, usa o último escolhido ou
+// "classic-full". Teste no celular em 2026-09-29 (23 scans da mesma carta na
+// mão): classic-full acertou 3/5, ml 2/10, ml-full 0/4. O ML desenha o melhor
+// contorno, mas põe os cantos por dentro da carta e corta a borda e o rodapé.
 function readDetMode(): DetMode {
   try {
     const q = new URLSearchParams(location.search).get("det") as DetMode | null;
     if (q && DET_MODES.includes(q)) localStorage.setItem(DET_KEY, q);
     const saved = localStorage.getItem(DET_KEY) as DetMode | null;
-    return saved && DET_MODES.includes(saved) ? saved : "ml";
-  } catch { return "ml"; }
+    return saved && DET_MODES.includes(saved) ? saved : "classic-full";
+  } catch { return "classic-full"; }
 }
 // Lado maior da foto nítida (takePhoto) usada para os recortes.
 const SHOT_MAX_DIM = 2400;
@@ -421,10 +428,10 @@ export class Scanner {
     const out = {} as Q.Quad;
     for (const k of ["topLeft", "topRight", "bottomRight", "bottomLeft"] as const)
       out[k] = { x: cx + r.corners[k].x / s2, y: cy + r.corners[k].y / s2 };
-    return out;
+    return ml ? Q.inset(out, -ML_GROW) : out;
   }
 
-  /** Detector variant, from ?det= or the badge button (saved in localStorage): ml (default), ml-full, classic, classic-full. */
+  /** Detector variant, from ?det= or the badge button (saved in localStorage): ml, ml-full, classic, classic-full (default). */
   detMode: DetMode = readDetMode();
   /** Moving average of the detector time per call, in ms. */
   detMs = 0;

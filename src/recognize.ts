@@ -41,6 +41,12 @@ const POST_COLD_MS = 40000;
 // errar dígito. Upload é o gargalo em rede ruim.
 const UPLOAD_MAX_DIM = 900;
 const UPLOAD_QUALITY = 0.75;
+// O número da carta ocupa ~1,3% da altura: no upload de 900px ele vira uma
+// mancha de ~12px que o OCR não lê. Por isso vai junto o rodapé (28% de baixo)
+// em resolução cheia. Bancada com 40 cartas degradadas: 14 → 23 números lidos.
+const FOOTER_FRAC = 0.28;
+const FOOTER_MAX_W = 1200;
+const FOOTER_QUALITY = 0.85;
 
 let warm = false;
 
@@ -78,10 +84,22 @@ function toJpeg(canvas: HTMLCanvasElement, quality = 0.8): Promise<Blob | null> 
   });
 }
 
-async function post(blob: Blob, preCropped: boolean, budgetMs: number) {
+function footer(card: HTMLCanvasElement): HTMLCanvasElement {
+  const sy = Math.round(card.height * (1 - FOOTER_FRAC));
+  const sh = card.height - sy;
+  const s = Math.min(1, FOOTER_MAX_W / card.width);
+  const out = document.createElement("canvas");
+  out.width = Math.round(card.width * s);
+  out.height = Math.max(1, Math.round(sh * s));
+  out.getContext("2d")!.drawImage(card, 0, sy, card.width, sh, 0, 0, out.width, out.height);
+  return out;
+}
+
+async function post(blob: Blob, preCropped: boolean, budgetMs: number, foot: Blob | null) {
   const fd = new FormData();
   fd.append("file", blob, "scan.jpg");
   if (preCropped) fd.append("pre", "1");
+  if (foot) fd.append("footer", foot, "footer.jpg");
   const ctl = new AbortController();
   let timedOut = false;
   const t0 = Date.now();
@@ -107,13 +125,15 @@ async function post(blob: Blob, preCropped: boolean, budgetMs: number) {
 export async function recognize(capture: HTMLCanvasElement, preCropped: boolean): Promise<Recognition | null> {
   const blob = await toJpeg(downscale(capture), UPLOAD_QUALITY);
   if (!blob) return null;
+  // Só com o warp: aí a foto É a carta e o rodapé é o rodapé da carta.
+  const foot = preCropped ? await toJpeg(footer(capture), FOOTER_QUALITY) : null;
   const budget = warm ? POST_WARM_MS : POST_COLD_MS;
-  let r = await post(blob, preCropped, budget);
+  let r = await post(blob, preCropped, budget, foot);
   // Reenvia só em falha rápida. Reenviar depois de timeout dobra a carga
   // quando o servidor já está afogado (1 vCPU) e colapsa a fila.
   if (!r.data && !r.timedOut && r.ms < 3000) {
     await new Promise((res) => setTimeout(res, 350));
-    r = await post(blob, preCropped, budget);
+    r = await post(blob, preCropped, budget, foot);
   }
   const d = r.data;
   warm = !!(d && d.card);
