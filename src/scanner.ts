@@ -483,25 +483,21 @@ export class Scanner {
     full.height = v.videoHeight;
     full.getContext("2d")!.drawImage(v, 0, 0);
     // O quad recebido é de até ~200ms atrás e a mão mexe nesse meio-tempo.
-    // Re-detecta neste frame exato; o quad antigo fica de reserva. Só troca se
-    // for o MESMO contorno: com mão, capa ou pilha na cena a re-detecção às
-    // vezes pega outro quadrilátero e o warp "endireitava" a coisa errada.
+    // Re-detecta neste frame exato e usa o novo quando plausível; o rastreado
+    // fica de reserva se o warp novo falhar. (Uma guarda que só aceitava o
+    // novo perto do rastreado piorou: nos casos medidos o errado era o
+    // rastreado — dedo cobrindo canto, caixa de ataque.)
     let use = quad;
-    let far: Q.Quad | null = null;
+    let backup: Q.Quad | null = null;
     try {
       const rd = await scanic.scanDocument(full, { mode: "detect", maxProcessingDimension: QUAD_PROXY_DIM });
       if (rd?.success && rd.corners) {
         const fresh = Q.inset(Q.order(rd.corners));
-        if (Q.isSane(fresh, v.videoWidth, v.videoHeight)) {
-          if (Q.relDelta(fresh, quad) < Q.FRESH_MAX_REL) use = fresh;
-          else far = fresh;
-        }
+        if (Q.isSane(fresh, v.videoWidth, v.videoHeight)) { backup = quad; use = fresh; }
       }
     } catch { /* fica com o quad anterior */ }
     let photo = await this.warpOne(full, use);
-    // Contorno rastreado deu warp impossível, mas a re-detecção achou outro
-    // quadrilátero plausível: tenta ele antes de desistir do warp.
-    if (!photo && far) photo = await this.warpOne(full, far);
+    if (!photo && backup) { photo = await this.warpOne(full, backup); if (photo) use = backup; }
     return { photo, drop: photo ? null : use };
   }
 

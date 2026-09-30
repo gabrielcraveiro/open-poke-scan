@@ -19,33 +19,25 @@ export function avgDelta(a: Quad, b: Quad): number {
 
 // Re-rotula os cantos por geometria: com a carta na diagonal os rótulos do
 // detector trocam entre frames, e um warp com rótulos trocados sai cisalhado.
-// Os extremos de x±y (versão anterior) perdiam um canto com a carta perto de
-// 45° e deitavam a carta acima disso (teste sintético: 209/420 em pé). Ordem
-// cíclica pelo ângulo em torno do centro + lado curto de cima como topo deixa
-// a carta em pé até ±85° (3420/3420).
+// Ordem cíclica pelo ângulo em torno do centro (nunca repete canto, nunca
+// espelha — os extremos de x±y antigos perdiam um canto perto de 45°); topo e
+// base = o par de lados MAIS HORIZONTAL, e topo = o de cima. Até 45° dá os
+// mesmos rótulos da versão original. A regra anterior ("lado curto em cima")
+// errava com a carta inclinada para trás na mão: a perspectiva encurta a
+// altura, um lado vertical virava "topo" e a retícula não travava. Acima de
+// 45° o contorno sai em paisagem e isSane() rejeita (vai pelo corte fixo).
 export function order(c: Quad): Quad {
   const pts = KEYS.map((k) => c[k]);
   const cx = (pts[0].x + pts[1].x + pts[2].x + pts[3].x) / 4;
   const cy = (pts[0].y + pts[1].y + pts[2].y + pts[3].y) / 4;
   // y cresce para baixo: ângulo crescente = sentido horário na tela (TL→TR→BR→BL).
   const cyc = pts.slice().sort((a, b) => Math.atan2(a.y - cy, a.x - cx) - Math.atan2(b.y - cy, b.x - cx));
-  const d = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
-  const shortFirst = d(cyc[0], cyc[1]) + d(cyc[2], cyc[3]) <= d(cyc[1], cyc[2]) + d(cyc[3], cyc[0]) ? 0 : 1;
+  const hor = (a: Point, b: Point) => Math.abs(b.x - a.x) - Math.abs(b.y - a.y);
+  const s = hor(cyc[0], cyc[1]) + hor(cyc[2], cyc[3]) >= hor(cyc[1], cyc[2]) + hor(cyc[3], cyc[0]) ? 0 : 1;
   const midY = (i: number) => (cyc[i % 4].y + cyc[(i + 1) % 4].y) / 2;
-  const start = midY(shortFirst) <= midY(shortFirst + 2) ? shortFirst : shortFirst + 2;
+  const start = midY(s) <= midY(s + 2) ? s : s + 2;
   const at = (i: number) => cyc[(start + i) % 4];
   return { topLeft: at(0), topRight: at(1), bottomRight: at(2), bottomLeft: at(3) };
-}
-
-// Re-detecção da captura: aceita o quad novo só se cada canto andou, em média,
-// menos que isto da diagonal do quad rastreado. A mão mexe ~1-3% em 200ms; um
-// contorno DIFERENTE (mão+carta, capa, pilha) fica bem acima disso.
-export const FRESH_MAX_REL = 0.08;
-
-/** Average corner movement between two quads, relative to the diagonal of `ref`. */
-export function relDelta(a: Quad, ref: Quad): number {
-  const diag = Math.hypot(ref.topLeft.x - ref.bottomRight.x, ref.topLeft.y - ref.bottomRight.y) || 1;
-  return avgDelta(a, ref) / diag;
 }
 
 /** Axis-aligned box around the quad, grown by `pad` on each side and clamped to w×h. */
@@ -70,14 +62,10 @@ export function isSane(c: Quad, w: number, h: number): boolean {
   if (rH < 0.6 || rH > 1.67 || rV < 0.6 || rV > 1.67) return false;
   const avgW = (top + bottom) / 2, avgH = (left + right) / 2;
   const aspect = avgW / avgH;
-  // order() põe o lado CURTO no topo, então aspect <= 1 sempre.
+  // Só retrato: contorno em paisagem (topo/base = lados horizontais, ver
+  // order()) é região interna da carta — caixa de ataque, faixa do nome — cujo
+  // warp mandava meia carta de lado, ou carta inclinada mais de 45°.
   if (aspect < 0.55 || aspect > 0.95) return false;
-  // Contorno DEITADO no quadro (lado curto de cima mais vertical que
-  // horizontal) = quase sempre uma região interna da carta: caixa de ataque,
-  // faixa do nome. O warp "endireitava" essa faixa e mandava meia carta de
-  // lado. Carta de verdade, na mão ou no suporte, fica em pé; deitada cai no
-  // corte fixo, que ainda funciona.
-  if (Math.abs(c.topRight.y - c.topLeft.y) > Math.abs(c.topRight.x - c.topLeft.x)) return false;
   const area = avgW * avgH;
   if (area < w * h * 0.015 || area > w * h * 0.95) return false;
   for (const k of KEYS) {
