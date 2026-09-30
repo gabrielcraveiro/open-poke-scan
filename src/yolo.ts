@@ -44,6 +44,10 @@ function load() {
       // Sem cross-origin isolation não há SharedArrayBuffer: multithread falharia.
       ort.env.wasm.numThreads = 1;
       const session = await ort.InferenceSession.create(MODEL_URL, { executionProviders: ["wasm"] });
+      // Aquecimento: a 1ª execução aloca a memória e sai bem mais lenta. Roda
+      // aqui, ao abrir a home, para esse custo não cair na primeira foto.
+      const warm = new ort.Tensor("float32", new Float32Array(3 * SIZE * SIZE), [1, 3, SIZE, SIZE]);
+      await session.run({ images: warm });
       return { ort, session };
     })();
     loading.catch(() => { loading = null; });
