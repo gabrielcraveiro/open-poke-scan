@@ -40,6 +40,23 @@ const QUAD_INTERVAL_MS = 200;
 const QUAD_PROXY_DIM = 480;
 // Recorte central onde o detector procura a carta, em frações do quadro: [x0, y0, x1, y1].
 const QUAD_CROP = [0.10, 0.12, 0.90, 0.88] as const;
+// Confiança mínima do modo ML (carta real = 1.0; jeans = 0.76).
+const ML_MIN_CONFIDENCE = 0.9;
+
+type DetMode = "ml" | "ml-full" | "classic" | "classic-full";
+const DET_MODES: readonly DetMode[] = ["ml", "ml-full", "classic", "classic-full"];
+const DET_KEY = "openpokescan.det";
+
+// Variante do detector para testar no celular: ?det=ml|ml-full|classic|classic-full
+// na URL (fica salvo no aparelho); sem nada, usa o último escolhido ou "ml".
+function readDetMode(): DetMode {
+  try {
+    const q = new URLSearchParams(location.search).get("det") as DetMode | null;
+    if (q && DET_MODES.includes(q)) localStorage.setItem(DET_KEY, q);
+    const saved = localStorage.getItem(DET_KEY) as DetMode | null;
+    return saved && DET_MODES.includes(saved) ? saved : "ml";
+  } catch { return "ml"; }
+}
 // Lado maior da foto nítida (takePhoto) usada para os recortes.
 const SHOT_MAX_DIM = 2400;
 const QUAD_STABLE_SLING = 2;
@@ -377,22 +394,51 @@ export class Scanner {
   // O detector procura a carta SÓ no centro do quadro, onde fica a retícula. No
   // quadro inteiro o scanic clássico escolhe o maior retângulo de bordas fortes
   // (mão, teclado, capa, o quadro todo) e o warp disso distorcia a prévia.
-  // Bancada com 13 quadros reais: cantos certos 2/13 → 7/13, erros 9 → 1.
+  // O modo ML do scanic (DocCornerNet, ~2 MB) prevê os 4 cantos com uma rede e
+  // acerta a carta na mão com fundo bagunçado. Bancada com 13 quadros reais:
+  //   clássico no quadro inteiro  2 certos / 9 errados, 39 ms (desktop)
+  //   clássico no centro          7 certos / 1 errado,  33 ms
+  //   ML no centro               12 certos / 0 errados, 15 ms
   // Devolve os cantos crus em px do quadro, ou null.
   private async detectCenter(src: CanvasImageSource, vw: number, vh: number, canvas: HTMLCanvasElement): Promise<Q.Quad | null> {
-    const [a, b, c, d] = QUAD_CROP;
+    const t0 = performance.now();
+    const full = this.detMode.endsWith("-full");
+    const [a, b, c, d] = full ? [0, 0, 1, 1] : QUAD_CROP;
     const cx = a * vw, cy = b * vh, cw = (c - a) * vw, ch = (d - b) * vh;
     const s2 = QUAD_PROXY_DIM / Math.max(cw, ch);
     const w = Math.round(cw * s2), h = Math.round(ch * s2);
     if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
     canvas.getContext("2d", { willReadFrequently: true })!.drawImage(src, cx, cy, cw, ch, 0, 0, w, h);
-    const r = await this.scanic!.scanDocument(canvas, { mode: "detect", maxProcessingDimension: QUAD_PROXY_DIM });
+    const ml = this.detMode.startsWith("ml");
+    let r = await this.scanic!.scanDocument(canvas, ml
+      ? { mode: "detect", detector: "ml", maxProcessingDimension: QUAD_PROXY_DIM }
+      : { mode: "detect", maxProcessingDimension: QUAD_PROXY_DIM });
+    // A rede sempre prevê 4 cantos: carta real dá confiança 1.0 (13/13), jeans
+    // 0.76, mesa vazia 0.001. Abaixo do corte, trata como "não achou".
+    if (ml && r?.success && (r.confidence ?? 0) < ML_MIN_CONFIDENCE) r = { ...r, success: false };
+    this.noteDetMs(performance.now() - t0);
     if (!(r?.success && r.corners)) return null;
     const out = {} as Q.Quad;
     for (const k of ["topLeft", "topRight", "bottomRight", "bottomLeft"] as const)
       out[k] = { x: cx + r.corners[k].x / s2, y: cy + r.corners[k].y / s2 };
     return out;
   }
+
+  /** Detector variant, from ?det= (saved in localStorage): ml (default), ml-full, classic, classic-full. */
+  readonly detMode: DetMode = readDetMode();
+  /** Moving average of the detector time per call, in ms. */
+  detMs = 0;
+
+  private noteDetMs(ms: number): void {
+    this.detMs = this.detMs ? this.detMs * 0.8 + ms * 0.2 : ms;
+    if (!this.detBadge) {
+      this.detBadge = document.createElement("div");
+      this.detBadge.className = "det-badge";
+      document.body.appendChild(this.detBadge);
+    }
+    this.detBadge.textContent = `det: ${this.detMode} · ${Math.round(this.detMs)} ms`;
+  }
+  private detBadge: HTMLDivElement | null = null;
 
   private async quadTick(): Promise<void> {
     const scanic = this.scanic;

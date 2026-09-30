@@ -133,3 +133,11 @@ body.sling-on .shutter { display: none; }
   position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom) + 6.5rem); transform: translateX(-50%);
   background: #fff; color: #111; padding: .55rem 1rem; border-radius: 999px; font-size: .88rem; max-width: 92vw; text-align: center;
 }
+
+/* Selinho do detector ativo (?det=) e do tempo médio por detecção: serve para
+   comparar as variantes no celular. Não recebe toque. */
+.det-badge {
+  position: fixed; left: 8px; bottom: calc(env(safe-area-inset-bottom) + 8px); z-index: 50;
+  padding: 2px 8px; border-radius: 999px; pointer-events: none;
+  font: 600 11px/1.6 ui-monospace, monospace; color: #fff; background: rgba(0, 0, 0, .55);
+}
