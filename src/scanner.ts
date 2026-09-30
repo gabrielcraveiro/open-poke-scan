@@ -40,6 +40,8 @@ const QUAD_INTERVAL_MS = 200;
 const QUAD_PROXY_DIM = 480;
 // Recorte central onde o detector procura a carta, em frações do quadro: [x0, y0, x1, y1].
 const QUAD_CROP = [0.10, 0.12, 0.90, 0.88] as const;
+// Lado maior da foto nítida (takePhoto) usada para os recortes.
+const SHOT_MAX_DIM = 2400;
 const QUAD_STABLE_SLING = 2;
 const QUAD_STABLE_HAND = 4;
 const QUAD_STILL_PX = 6;       // movimento médio por canto abaixo disso = parado
@@ -83,6 +85,7 @@ export class Scanner {
   /** Dimensions of the tracking space: the full frame scaled to QUAD_PROXY_DIM. */
   private quadProxy: { width: number; height: number } | null = null;
   private quadCropCanvas: HTMLCanvasElement | null = null;
+  private imageCapture: { takePhoto(): Promise<Blob> } | null = null;
   private quadFiredAt: Q.Quad | null = null;
   private reticle: Q.Quad | null = null;
 
@@ -161,6 +164,7 @@ export class Scanner {
     this.raf = null;
     this.stream?.getTracks().forEach((t) => t.stop());
     this.stream = null;
+    this.imageCapture = null;   // preso à faixa antiga; recriado no próximo disparo
     this.video.srcObject = null;
     this.ro.disconnect();
   }
@@ -496,26 +500,20 @@ export class Scanner {
    * Perspective-corrected photo of the card inside `quad`.
    * Returns the photo, or `drop` (the quad to fall back to) when no warp is plausible.
    */
-  private async warp(quad: Q.Quad): Promise<{ photo: HTMLCanvasElement | null; drop: Q.Quad | null }> {
+  private async warp(full: HTMLCanvasElement, quad: Q.Quad): Promise<{ photo: HTMLCanvasElement | null; drop: Q.Quad | null }> {
     const scanic = this.scanic;
     if (!scanic) return { photo: null, drop: null };
-    const v = this.video;
-    const full = document.createElement("canvas");
-    full.width = v.videoWidth;
-    full.height = v.videoHeight;
-    full.getContext("2d")!.drawImage(v, 0, 0);
-    // O quad recebido é de até ~200ms atrás e a mão mexe nesse meio-tempo.
-    // Re-detecta neste frame exato e usa o novo quando plausível; o rastreado
-    // fica de reserva se o warp novo falhar. (Uma guarda que só aceitava o
-    // novo perto do rastreado piorou: nos casos medidos o errado era o
-    // rastreado — dedo cobrindo canto, caixa de ataque.)
+    // Re-detecta NA PRÓPRIA FOTO: os cantos são do mesmo instante dela (a mão
+    // mexe durante o refoco do takePhoto). O contorno rastreado — em escala da
+    // foto — fica de reserva se o warp novo falhar. (Uma guarda que preferia o
+    // rastreado piorou: dedo cobrindo canto, caixa de ataque.)
     let use = quad;
     let backup: Q.Quad | null = null;
     try {
-      const fc = await this.detectCenter(full, v.videoWidth, v.videoHeight, document.createElement("canvas"));
+      const fc = await this.detectCenter(full, full.width, full.height, document.createElement("canvas"));
       if (fc) {
         const fresh = Q.inset(Q.order(fc));
-        if (Q.isSane(fresh, v.videoWidth, v.videoHeight)) { backup = quad; use = fresh; }
+        if (Q.isSane(fresh, full.width, full.height)) { backup = quad; use = fresh; }
       }
     } catch { /* fica com o quad anterior */ }
     let photo = await this.warpOne(full, use);
@@ -553,6 +551,45 @@ export class Scanner {
     return norm;
   }
 
+  /**
+   * Sharp photo of the capture moment, in the video's field of view.
+   * Uses ImageCapture.takePhoto() (refocus, full resolution) cropped to the
+   * stream framing and capped at SHOT_MAX_DIM. Falls back to the video frame
+   * when ImageCapture is missing (Firefox, iOS) or fails within 2.5s.
+   * `k` = photo px per video px.
+   */
+  private async sharpFrame(): Promise<{ canvas: HTMLCanvasElement; k: number; still: boolean }> {
+    // O quadro do vídeo fica mole de perto (o AF contínuo não trava macro) e a
+    // carta deixava de ser reconhecida: as capturas saíam lavadas e borradas.
+    const v = this.video, vw = v.videoWidth, vh = v.videoHeight;
+    try {
+      const track = this.stream?.getVideoTracks()[0];
+      const IC = (window as unknown as { ImageCapture?: new (t: MediaStreamTrack) => { takePhoto(): Promise<Blob> } }).ImageCapture;
+      if (track && IC) {
+        if (!this.imageCapture) this.imageCapture = new IC(track);
+        const blob = await Promise.race([
+          this.imageCapture.takePhoto(),
+          new Promise<never>((_, rej) => setTimeout(() => rej(new Error("still timeout")), 2500)),
+        ]);
+        const bmp = await createImageBitmap(blob);
+        // O vídeo é um center-crop da foto: uma escala só + offsets centrando o
+        // campo excedente. Escalar cada eixo separado recortava a região errada.
+        const s = Math.min(bmp.width / vw, bmp.height / vh);
+        const offX = (bmp.width - vw * s) / 2, offY = (bmp.height - vh * s) / 2;
+        const k = Math.min(s, SHOT_MAX_DIM / Math.max(vw, vh));
+        const c = document.createElement("canvas");
+        c.width = Math.round(vw * k); c.height = Math.round(vh * k);
+        c.getContext("2d")!.drawImage(bmp, offX, offY, vw * s, vh * s, 0, 0, c.width, c.height);
+        bmp.close();
+        return { canvas: c, k, still: true };
+      }
+    } catch { /* cai no quadro do vídeo */ }
+    const c = document.createElement("canvas");
+    c.width = vw; c.height = vh;
+    c.getContext("2d")!.drawImage(v, 0, 0);
+    return { canvas: c, k: 1, still: false };
+  }
+
   private async capture(quad?: Q.Quad): Promise<void> {
     if (this.capturing || !this.coords) return;
     this.capturing = true;
@@ -563,32 +600,35 @@ export class Scanner {
       this.lastAddData = this.lastData;
       this.movedSince = false;
     }
+    // Todos os recortes saem da foto nítida (ver sharpFrame); `quad` e o
+    // retângulo da retícula estão em px do vídeo, então escalam por `k`.
+    const shot = await this.sharpFrame();
+    const src = shot.canvas, k = shot.k;
     let photo: HTMLCanvasElement | null = null;
     let preCropped = false;
     if (quad) {
       let drop: Q.Quad | null = null;
-      try { ({ photo, drop } = await this.warp(quad)); } catch { photo = null; }
+      try { ({ photo, drop } = await this.warp(src, Q.scale(quad, k))); } catch { photo = null; }
       preCropped = !!photo;
       // Warp descartado: a carta está DENTRO do contorno que o usuário vê, não
       // necessariamente no corte fixo (que cortava as laterais de carta grande).
       // Recorta a caixa do contorno e deixa a detecção do servidor achar a carta.
       if (!photo && drop) {
-        const v = this.video;
-        const b = Q.bbox(drop, v.videoWidth, v.videoHeight, 0.06);
+        const b = Q.bbox(drop, src.width, src.height, 0.06);
         if (b.w >= 40 && b.h >= 40) {
           photo = document.createElement("canvas");
           photo.width = Math.round(b.w);
           photo.height = Math.round(b.h);
-          photo.getContext("2d")!.drawImage(v, b.x, b.y, b.w, b.h, 0, 0, photo.width, photo.height);
+          photo.getContext("2d")!.drawImage(src, b.x, b.y, b.w, b.h, 0, 0, photo.width, photo.height);
         }
       }
     }
     if (!photo) {
       const { px, py, pw, ph } = this.coords;
       photo = document.createElement("canvas");
-      photo.width = Math.round(pw * 2);
-      photo.height = Math.round(ph * 2);
-      photo.getContext("2d")!.drawImage(this.video, px, py, pw, ph, 0, 0, photo.width, photo.height);
+      photo.width = Math.max(1, Math.round(pw * k));
+      photo.height = Math.max(1, Math.round(ph * k));
+      photo.getContext("2d")!.drawImage(src, px * k, py * k, pw * k, ph * k, 0, 0, photo.width, photo.height);
     }
     navigator.vibrate?.(15);
     this.frame.classList.add("is-locked");
