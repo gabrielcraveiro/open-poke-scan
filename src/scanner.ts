@@ -38,6 +38,8 @@ const SLING_REARM_TIMEOUT_MS = 4000;
 
 const QUAD_INTERVAL_MS = 200;
 const QUAD_PROXY_DIM = 480;
+// Recorte central onde o detector procura a carta, em frações do quadro: [x0, y0, x1, y1].
+const QUAD_CROP = [0.10, 0.12, 0.90, 0.88] as const;
 const QUAD_STABLE_SLING = 2;
 const QUAD_STABLE_HAND = 4;
 const QUAD_STILL_PX = 6;       // movimento médio por canto abaixo disso = parado
@@ -78,7 +80,9 @@ export class Scanner {
   private quadMiss = 0;
   private quadBusy = false;
   private quadLastRun = 0;
-  private quadProxy: HTMLCanvasElement | null = null;
+  /** Dimensions of the tracking space: the full frame scaled to QUAD_PROXY_DIM. */
+  private quadProxy: { width: number; height: number } | null = null;
+  private quadCropCanvas: HTMLCanvasElement | null = null;
   private quadFiredAt: Q.Quad | null = null;
   private reticle: Q.Quad | null = null;
 
@@ -366,6 +370,26 @@ export class Scanner {
     return Q.scale(this.quadRaw, this.video.videoWidth / this.quadProxy.width);
   }
 
+  // O detector procura a carta SÓ no centro do quadro, onde fica a retícula. No
+  // quadro inteiro o scanic clássico escolhe o maior retângulo de bordas fortes
+  // (mão, teclado, capa, o quadro todo) e o warp disso distorcia a prévia.
+  // Bancada com 13 quadros reais: cantos certos 2/13 → 7/13, erros 9 → 1.
+  // Devolve os cantos crus em px do quadro, ou null.
+  private async detectCenter(src: CanvasImageSource, vw: number, vh: number, canvas: HTMLCanvasElement): Promise<Q.Quad | null> {
+    const [a, b, c, d] = QUAD_CROP;
+    const cx = a * vw, cy = b * vh, cw = (c - a) * vw, ch = (d - b) * vh;
+    const s2 = QUAD_PROXY_DIM / Math.max(cw, ch);
+    const w = Math.round(cw * s2), h = Math.round(ch * s2);
+    if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+    canvas.getContext("2d", { willReadFrequently: true })!.drawImage(src, cx, cy, cw, ch, 0, 0, w, h);
+    const r = await this.scanic!.scanDocument(canvas, { mode: "detect", maxProcessingDimension: QUAD_PROXY_DIM });
+    if (!(r?.success && r.corners)) return null;
+    const out = {} as Q.Quad;
+    for (const k of ["topLeft", "topRight", "bottomRight", "bottomLeft"] as const)
+      out[k] = { x: cx + r.corners[k].x / s2, y: cy + r.corners[k].y / s2 };
+    return out;
+  }
+
   private async quadTick(): Promise<void> {
     const scanic = this.scanic;
     if (!scanic || this.quadBusy || this.capturing) return;
@@ -377,15 +401,13 @@ export class Scanner {
       const vw = this.video.videoWidth, vh = this.video.videoHeight;
       const s = QUAD_PROXY_DIM / Math.max(vw, vh);
       const pw = Math.round(vw * s), ph = Math.round(vh * s);
-      if (!this.quadProxy || this.quadProxy.width !== pw || this.quadProxy.height !== ph) {
-        this.quadProxy = document.createElement("canvas");
-        this.quadProxy.width = pw;
-        this.quadProxy.height = ph;
-      }
-      this.quadProxy.getContext("2d", { willReadFrequently: true })!.drawImage(this.video, 0, 0, pw, ph);
-      const r = await scanic.scanDocument(this.quadProxy, { mode: "detect", maxProcessingDimension: QUAD_PROXY_DIM });
+      if (!this.quadProxy || this.quadProxy.width !== pw || this.quadProxy.height !== ph) this.quadProxy = { width: pw, height: ph };
+      if (!this.quadCropCanvas) this.quadCropCanvas = document.createElement("canvas");
+      // Cantos em px do quadro → espaço de rastreio (quadro inteiro reduzido): filtro,
+      // suavização, disparo e retícula continuam iguais.
+      const fc = await this.detectCenter(this.video, vw, vh, this.quadCropCanvas);
       if (this.capturing) return;
-      const ordered = r?.success && r.corners ? Q.inset(Q.order(r.corners)) : null;
+      const ordered = fc ? Q.inset(Q.order(Q.scale(fc, s))) : null;
       if (!ordered || !Q.isSane(ordered, pw, ph)) {
         this.quadMiss++;
         this.quadStable = 0;
@@ -490,9 +512,9 @@ export class Scanner {
     let use = quad;
     let backup: Q.Quad | null = null;
     try {
-      const rd = await scanic.scanDocument(full, { mode: "detect", maxProcessingDimension: QUAD_PROXY_DIM });
-      if (rd?.success && rd.corners) {
-        const fresh = Q.inset(Q.order(rd.corners));
+      const fc = await this.detectCenter(full, v.videoWidth, v.videoHeight, document.createElement("canvas"));
+      if (fc) {
+        const fresh = Q.inset(Q.order(fc));
         if (Q.isSane(fresh, v.videoWidth, v.videoHeight)) { backup = quad; use = fresh; }
       }
     } catch { /* fica com o quad anterior */ }
