@@ -127,6 +127,7 @@ Na Vercel, `VITE_RECOGNIZE_URL` e `VITE_TELEMETRY_URL` estão definidas em Produ
 | 2026-09-29 | Ordem de cantos e filtro do contorno voltam ao original (as mudanças acima pioraram a carta na mão). Foto nítida do `takePhoto`, rodapé em alta resolução para o OCR. |
 | 2026-09-30 | Lente com foco automático; YOLO de cantos na foto capturada; modos de teste do detector removidos. |
 | 2026-09-30 | Prévia instantânea no disparo; escolha entre as candidatas quando o servidor não está confiante. |
+| 2026-10-01 | `server/` alcança o servidor publicado: filtro do TCG Pocket, `not_card` e confiança calibrada, OCR nos cantos do `footer`, OCR pulado quando já é confiante, penalidade das cartas ímã a partir de fotos reais (`scripts/build_hub_penalty.py`). |
 | 2026-09-28 | Telemetria anônima (só na versão publicada). |
 | 2026-09-28 | `server/` para rodar o reconhecimento do zero. |
 | 2026-09-28 | Só preço em real (sem EUR/USD). |

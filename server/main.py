@@ -2,14 +2,15 @@
 
 POST /recognize: photo of one card -> the matching catalog card.
 
-Pipeline: DINOv2-small embedding -> cosine similarity against the index ->
-pHash tie-break between prints with the same art -> OCR of the collector
-number (Tesseract) only when the match is ambiguous.
+Pipeline: DINOv2-small embedding -> cosine similarity against the index, minus
+the hub penalty of each card -> pHash tie-break between prints with the same
+art -> OCR of the collector number (Tesseract) only when the match is ambiguous.
 
     uvicorn main:app --host 0.0.0.0 --port 8000
 
 Environment:
-    MODELS_DIR     folder with model.onnx, emb.f16.bin, meta.json (default: ./models)
+    MODELS_DIR     folder with model.onnx, emb.f16.bin, meta.json and the
+                   optional hub.json (default: ./models)
     ALLOW_ORIGINS  comma-separated CORS origins (default: *)
     DEBUG_DIR      when set, saves each uploaded photo there for 6 hours
 """
@@ -23,9 +24,9 @@ import time
 import numpy as np
 import onnxruntime as ort
 import pytesseract
-from fastapi import FastAPI, File, Request, UploadFile
+from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from PIL import Image
+from PIL import Image, ImageOps
 
 from cardvision import EMB_DIM, embed, phash
 
@@ -36,6 +37,14 @@ MAT = np.fromfile(os.path.join(MODELS, "emb.f16.bin"), dtype=np.float16).astype(
 MAT /= np.linalg.norm(MAT, axis=1, keepdims=True) + 1e-9
 with open(os.path.join(MODELS, "meta.json")) as _f:
     META = json.load(_f)["cards"]
+
+# TCG Pocket (A1…A4a, B1…B2, P-A) só existe no jogo digital: ninguém escaneia
+# essas cartas em papel, e elas eram o 1º lugar de fotos de outras cartas.
+_POCKET_SET_RE = re.compile(r"^(A\d|B\d|P-[AB])")
+_keep = [i for i, c in enumerate(META) if not _POCKET_SET_RE.match(c.get("set_id") or "")]
+MAT = MAT[_keep]
+META = [META[i] for i in _keep]
+
 PHASH = []
 for _c in META:
     _p = _c.get("phash")
@@ -44,16 +53,40 @@ for _c in META:
     except (TypeError, ValueError):
         PHASH.append(None)
 
+# Penalidade de "hub" por carta (models/hub.json, de scripts/build_hub_penalty.py
+# com fotos reais). Algumas cartas ficam perto de MUITAS fotos (holo lavado,
+# pouco contraste) e ganham o 1º lugar de fotos de outras cartas. A ordem usa
+# cos - _HUB_ALPHA * penalidade; os limites absolutos (não é carta, confiança)
+# continuam no cosseno puro. No servidor publicado (121 scans com gabarito):
+# 1º lugar certo de 71% para 79%, sem estragar nenhum. Sem o arquivo, não há
+# penalidade.
+_HUB_ALPHA = 0.25
+try:
+    with open(os.path.join(MODELS, "hub.json")) as _f:
+        _hub = json.load(_f)
+    HUB = np.array([_hub["cards"].get(c["api_id"], _hub["median"]) for c in META], dtype=np.float32)
+except (OSError, ValueError, KeyError):
+    HUB = np.zeros(len(META), dtype=np.float32)
+
 # ── OCR do número ────────────────────────────────────────────────────────────
 # Configs de um grid search offline (24 combinações de tira/escala/PSM):
-# o composto abaixo leu 5/10 com 0 leituras erradas em ~470ms. PSM 7 (linha
-# única) leu zero: a tira tem várias linhas.
+# o composto abaixo leu 5/10 com 0 leituras erradas em ~470ms.
 _TESS_BLOCK = "--psm 6 -c tessedit_char_whitelist=0123456789/"
 _TESS_SPARSE = "--psm 11 -c tessedit_char_whitelist=0123456789/"
+_TESS_LINE = "--psm 7 -c tessedit_char_whitelist=0123456789/"
 _NUM_RE = re.compile(r"(\d{1,4})\s*/\s*(\d{1,3})(?!\d)")
 # Largura da tira antes do upscale 3×. Sem normalizar, uploads grandes
 # estouravam o timeout do OCR em todo scan.
 _OCR_STRIP_W = 600
+# Cantos de baixo do rodapé em alta (campo `footer`), onde fica o número:
+# esquerdo nas cartas atuais, direito nas antigas. A faixa inteira tinha
+# ataque, fraqueza e copyright: o Tesseract gastava tempo e se confundia.
+# 32 rodapés reais com gabarito: 7 números certos contra 6 da faixa inteira, e
+# o pior caso de 804 para 584ms.
+_OCR_CORNERS = ((0.0, 0.66, 0.50, 1.0), (0.55, 0.66, 1.0, 1.0))
+# Altura do recorte depois do upscale: a linha do número ocupa ~1/3 dele, e o
+# Tesseract lê melhor com letras de ~30-40px.
+_OCR_CORNER_H = 110
 
 
 def _digits(s) -> str:
@@ -84,13 +117,31 @@ def _norm_strip(strip: Image.Image) -> Image.Image:
     return strip.resize((max(1, strip.width * 3), max(1, strip.height * 3)))
 
 
-def read_number(img: Image.Image):
-    """OCR of the collector number. Returns (number, total, raw_text)."""
+def _tess(deadline: float):
+    # Cada chamada recebe o tempo que sobra e é MORTA quando ele acaba: uma
+    # chamada abandonada seguiria queimando a única CPU enquanto o próximo
+    # scan espera.
+    def run(im, cfg):
+        left = deadline - time.time()
+        if left <= 0.05:
+            return None
+        try:
+            return pytesseract.image_to_string(im, config=cfg, timeout=left)
+        except RuntimeError:  # pytesseract: "Tesseract process timeout"
+            return None
+    return run
+
+
+def read_number(img: Image.Image, budget_s: float):
+    """OCR of the collector number in the bottom of `img`. Returns (number, total, raw_text)."""
+    tess = _tess(time.time() + budget_s)
     w, h = img.size
     gray = img.convert("L")
     raws = []
     band = _norm_strip(gray.crop((0, int(h * 0.86), w, h)))
-    text = pytesseract.image_to_string(band, config=_TESS_SPARSE)
+    text = tess(band, _TESS_SPARSE)
+    if text is None:
+        return None, None, "(ocr timeout)"
     raws.append(text.strip())
     hit = _find_num(text)
     if hit:
@@ -99,7 +150,9 @@ def read_number(img: Image.Image):
     strip = _norm_strip(gray.crop((0, int(h * 0.72), w, h)))
     sw, sh = strip.size
     for half in (strip.crop((0, 0, sw // 2, sh)), strip.crop((sw // 2, 0, sw, sh))):
-        text = pytesseract.image_to_string(half, config=_TESS_BLOCK)
+        text = tess(half, _TESS_BLOCK)
+        if text is None:
+            return None, None, " | ".join(raws + ["(ocr timeout)"])
         raws.append(text.strip())
         hit = _find_num(text)
         if hit:
@@ -107,14 +160,44 @@ def read_number(img: Image.Image):
     return None, None, " | ".join(raws)
 
 
-# Tesseract em tira ruidosa pode levar segundos e segura a fila inteira.
-# Estourou, segue sem número: o embedding reconhece sozinho.
-_OCR_TIMEOUT_S = 1.5
-# O OCR só roda quando muda a resposta. Match decisivo (cosseno alto e folga
-# sobre o 2º) dispensa; cosseno muito baixo = nem é uma carta.
-_OCR_SKIP_COS = 0.80
-_OCR_SKIP_GAP = 0.05
-_OCR_MIN_COS = 0.35
+def read_number_footer(strip: Image.Image, budget_s: float):
+    """OCR of the collector number in the full-resolution footer (bottom 28% of the card).
+
+    Reads only the two bottom corners. Returns (number, total, raw_text).
+    """
+    tess = _tess(time.time() + budget_s)
+    gray = strip.convert("L")
+    w, h = gray.size
+    raws = []
+    for x0, y0, x1, y1 in _OCR_CORNERS:
+        c = gray.crop((int(w * x0), int(h * y0), int(w * x1), int(h * y1)))
+        up = max(1.0, _OCR_CORNER_H / max(1, c.height))
+        c = ImageOps.autocontrast(c.resize((round(c.width * up), round(c.height * up))))
+        for cfg in (_TESS_LINE, _TESS_SPARSE):
+            text = tess(c, cfg)
+            if text is None:
+                return None, None, " | ".join(raws + ["(ocr timeout)"])
+            raws.append(text.strip())
+            hit = _find_num(text)
+            if hit:
+                return hit[0], hit[1], " | ".join(raws)
+    return None, None, " | ".join(raws)
+
+
+# Prazo do OCR. Estourou, segue sem número: o embedding reconhece sozinho.
+_OCR_TIMEOUT_S = 1.1
+# Limiares calibrados com 160 scans reais rotulados (d = (1−cos)×100):
+# - Nenhuma carta certa passou de d=39; quadros sem carta (jeans, tela preta,
+#   teclado) ficaram em d=40-89. Abaixo deste cosseno não é carta.
+_NOT_CARD_COS = 0.55
+# - "confident" com cos>=0.55 errava 15% dos aceites. cos>=0.72 E folga>=0.03
+#   sobre o 2º deu 80/81 certos. Folga pequena = mesma arte em outro print.
+_CONF_COS = 0.72
+_CONF_GAP = 0.03
+# - O total impresso separa sets com a mesma arte: vale como desempate entre
+#   candidatos quase empatados, não como prova.
+_TOTAL_FUSION_TOPN = 5
+_TOTAL_FUSION_GAP = 0.03
 # Gap top1−top2 abaixo disso = empate de arte, e o pHash decide.
 _PHASH_TIE_GAP = 0.02
 
@@ -123,9 +206,62 @@ _PHASH_TIE_GAP = 0.02
 _INFER_SEM = asyncio.Semaphore(int(os.environ.get("MAX_CONCURRENCY", "1")))
 
 
-async def _ocr_bounded(img):
+def _name_key(i: int) -> str:
+    # "Buzzwole-GX" e "Buzzwole GX" são a mesma carta com grafias diferentes.
+    return re.sub(r"[^a-z0-9]", "", str(META[i]["name"]).lower())
+
+
+def decide(sims, score, topk, pick, num=None, total=None):
+    """Apply the OCR fusion and the confidence gate to one ranking.
+
+    Args:
+        sims: cosine similarity of the photo to every catalog row.
+        score: ranking score per row (cosine minus the hub penalty). The
+            margins between candidates use it; the absolute gates (not a card,
+            confident) use the raw cosine.
+        topk: row indices of the best matches, best first (ordered by `score`).
+        pick: row that the ranking (plus the pHash tie-break) chose.
+        num, total: collector number read by OCR, or None.
+
+    Returns:
+        dict with keys pick, number_match, total_match, confident, not_card.
+    """
+    number_match = total_match = False
+    if num:
+        dn = _digits(num)
+        pool = [i for i in topk if _digits(META[i]["number"]) == dn]
+        with_total = [i for i in pool
+                      if total and str(META[i].get("printed_total")) == str(int(_digits(total)))]
+        if with_total:
+            pick, number_match = with_total[0], True
+        elif pool and not total:
+            pick, number_match = pool[0], True
+        # Número bate mas o total contradiz: a carta provavelmente não está no
+        # catálogo. Não força; fica o embedding.
+    if total and not number_match:
+        dt = str(int(_digits(total)))
+        near = [i for i in topk[:_TOTAL_FUSION_TOPN]
+                if str(META[i].get("printed_total")) == dt
+                and float(score[topk[0]] - score[i]) < _TOTAL_FUSION_GAP]
+        if near and near[0] != pick:
+            pick, total_match = near[0], True
+    top_cos = float(max(sims[i] for i in topk))
+    others = [float(score[i]) for i in topk if i != pick]
+    gap = float(score[pick]) - (max(others) if others else 0.0)
+    confident = number_match or (float(sims[pick]) >= _CONF_COS and gap >= _CONF_GAP)
+    return {"pick": pick, "number_match": number_match, "total_match": total_match,
+            "confident": confident, "not_card": top_cos < _NOT_CARD_COS}
+
+
+async def _ocr_bounded(img, footer):
+    # O prazo real é o do Tesseract (morto ao estourar); o wait_for com folga
+    # só protege a resposta se algo fora dele travar.
+    def job():
+        if footer is not None:
+            return read_number_footer(footer, _OCR_TIMEOUT_S)
+        return read_number(img, _OCR_TIMEOUT_S)
     try:
-        return await asyncio.wait_for(asyncio.to_thread(read_number, img), timeout=_OCR_TIMEOUT_S)
+        return await asyncio.wait_for(asyncio.to_thread(job), timeout=_OCR_TIMEOUT_S + 0.3)
     except asyncio.TimeoutError:
         return None, None, "(ocr timeout)"
 
@@ -167,17 +303,24 @@ def _card(i: int, sims: np.ndarray) -> dict:
 
 
 @app.post("/recognize")
-async def recognize(request: Request, file: UploadFile = File(...)):
+async def recognize(request: Request, file: UploadFile = File(...), pre: str = Form(None),
+                    footer: UploadFile = File(None)):
     """Identify one card.
 
-    Form field `file`: JPEG of the card. The web client also sends `pre=1`;
-    this server ignores it and always treats the whole image as the card
-    (the client already crops it).
-    Returns {card, confident, ocr, candidates, ms}.
+    Form fields:
+        file: JPEG of the card. This server always treats the whole image as
+            the card (the client crops it).
+        pre: "1" when `file` is already the perspective-corrected card.
+        footer: optional JPEG of the bottom 28% of that card at full camera
+            resolution. With it (and pre=1), the OCR reads the collector
+            number from `footer` instead of from the downscaled `file`.
+
+    Returns {card, confident, not_card, ocr, candidates, ms}.
     """
     global _recognize_count
     t0 = time.time()
     data = await file.read()
+    footer_data = await footer.read() if footer is not None else b""
     if DEBUG_DIR:
         _recognize_count += 1
         try:
@@ -200,45 +343,51 @@ async def recognize(request: Request, file: UploadFile = File(...)):
         vec = await asyncio.to_thread(embed, emb_sess, img)
         t_emb = time.time()
         sims = MAT @ vec
-        topk = [int(i) for i in np.argsort(-sims)[:25]]
+        score = sims - _HUB_ALPHA * HUB
+        topk = [int(i) for i in np.argsort(-score)[:25]]
         pick = topk[0]
-        gap = float(sims[topk[0]] - sims[topk[1]]) if len(topk) > 1 else 1.0
+        gap = float(score[topk[0]] - score[topk[1]]) if len(topk) > 1 else 1.0
         if gap < _PHASH_TIE_GAP:
-            tied = [i for i in topk if float(sims[topk[0]] - sims[i]) < _PHASH_TIE_GAP and PHASH[i] is not None]
+            tied = [i for i in topk if float(score[topk[0]] - score[i]) < _PHASH_TIE_GAP and PHASH[i] is not None]
             if len(tied) > 1:
                 qh = phash(img)
                 pick = min(tied, key=lambda i: (qh ^ PHASH[i]).bit_count())
 
+        # O OCR só roda quando pode mudar a resposta. Pula quando o embedding
+        # já daria a resposta como confiante E os dois primeiros não têm o
+        # mesmo nome. Mesmo nome = mesma arte em outro set: aí só o número
+        # desempata.
         num = total = None
         top_cos = float(sims[pick])
-        if top_cos < _OCR_MIN_COS:
+        if top_cos < _NOT_CARD_COS:
             raw = "(ocr skipped: not a card)"
-        elif top_cos >= _OCR_SKIP_COS and gap >= _OCR_SKIP_GAP:
+        elif (top_cos >= _CONF_COS and gap >= _CONF_GAP
+              and (len(topk) < 2 or _name_key(topk[0]) != _name_key(topk[1]))):
             raw = "(ocr skipped: decisive)"
         else:
-            num, total, raw = await _ocr_bounded(img)
-        number_match = False
-        if num:
-            dn = _digits(num)
-            pool = [i for i in topk if _digits(META[i]["number"]) == dn]
-            if pool:
-                if total:
-                    dt = str(int(_digits(total)))
-                    with_total = [i for i in pool if str(META[i].get("printed_total")) == dt]
-                    # Número bate mas o total contradiz: a carta provavelmente
-                    # não está no catálogo. Não força; fica o embedding.
-                    if with_total:
-                        pick, number_match = with_total[0], True
-                else:
-                    pick, number_match = pool[0], True
-        confident = number_match or float(sims[pick]) >= 0.55
+            strip = None
+            if footer_data and pre == "1":
+                try:
+                    strip = Image.open(io.BytesIO(footer_data))
+                except Exception:
+                    strip = None
+            num, total, raw = await _ocr_bounded(img, strip)
+            if strip is not None:
+                raw = "[hi] " + raw
+        verdict = decide(sims, score, topk, pick, num, total)
+        pick = verdict["pick"]
 
-        print(f"[REC] ocr={num}/{total} match={number_match} -> {META[pick]['api_id']} "
-              f"cos={float(sims[pick]):.3f} gap={gap:.3f} ms={round((time.time() - t0) * 1000)}", flush=True)
+        print(f"[REC] ocr={num}/{total} match={verdict['number_match']} notcard={verdict['not_card']} "
+              f"-> {META[pick]['api_id']} cos={float(sims[pick]):.3f} gap={gap:.3f} "
+              f"ms={round((time.time() - t0) * 1000)} raw={raw[:40]!r}", flush=True)
+        # `card` continua presente com not_card=True: o cliente mostra o aviso
+        # de quadro sem carta, e clientes antigos seguem vendo um resultado.
         return {
             "card": _card(pick, sims),
-            "confident": confident,
-            "ocr": {"number": num, "total": total, "match": number_match, "raw": raw[:60]},
+            "confident": verdict["confident"],
+            "not_card": verdict["not_card"],
+            "ocr": {"number": num, "total": total, "match": verdict["number_match"],
+                    "total_match": verdict["total_match"], "raw": raw[:60]},
             "candidates": [_card(i, sims) for i in topk[:5]],
             "ms": {"compute": round((t_emb - t0) * 1000), "total": round((time.time() - t0) * 1000)},
         }

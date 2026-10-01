@@ -5,9 +5,11 @@ Serviço que o site chama para identificar a carta (`POST /recognize`). O site p
 ## O que roda
 
 1. **Embedding:** [DINOv2-small](https://huggingface.co/facebook/dinov2-small) (Meta, Apache-2.0), entrada 336×336, pesos fp16 (~44MB). Sem treino extra: é o modelo público.
-2. **Busca:** similaridade de cosseno contra o índice de cartas (~22 mil, do [TCGdex](https://tcgdex.dev)).
-3. **Desempate:** pHash da arte quando dois prints têm quase a mesma imagem.
-4. **OCR do número** (Tesseract): só quando o match é ambíguo. Número + total impresso é quase uma chave única.
+2. **Busca:** similaridade de cosseno contra o índice de cartas (~20 mil do [TCGdex](https://tcgdex.dev); as cartas do TCG Pocket, só digitais, saem no boot).
+3. **Penalidade das cartas "ímã"** (opcional): algumas cartas parecem com quase qualquer foto lavada por reflexo e roubam o 1º lugar. Com `models/hub.json`, a ordem usa `cosseno − 0,25 × penalidade da carta`. Veja o passo 3.
+4. **Desempate:** pHash da arte quando dois prints têm quase a mesma imagem.
+5. **OCR do número** (Tesseract): só quando o match é ambíguo, ou quando as duas primeiras cartas têm o mesmo nome (mesma arte em outro set). Lê os cantos de baixo do campo `footer` (o rodapé em resolução cheia que o site manda) ou, sem ele, o rodapé da própria foto. Número + total impresso é quase uma chave única.
+6. **Confiança:** `confident` quando o número confere, ou com cosseno ≥ 0,72 e folga ≥ 0,03 sobre a 2ª. Abaixo de 0,55, `not_card` (mão, mesa, tecido). Calibrado com 160 scans reais rotulados.
 
 Roda em CPU. Um scan leva ~0,3–1s numa máquina de 1 vCPU.
 
@@ -37,7 +39,17 @@ O catálogo inteiro baixa ~600MB de imagens do TCGdex e leva ~1h a 1h30 numa CPU
 
 Saída em `models/`: `emb.f16.bin` (vetores) e `meta.json` (dados das cartas, na mesma ordem).
 
-### 3. Rodar
+### 3. Penalidade das cartas "ímã" (opcional)
+
+Precisa de fotos reais de scans. Com `DEBUG_DIR` definido, o servidor guarda cada foto recebida por 6 horas: copie essas fotos para uma pasta de tempos em tempos. Com algumas centenas:
+
+```bash
+python scripts/build_hub_penalty.py --photos ~/fotos-de-scan
+```
+
+Grava `models/hub.json`. Reinicie o servidor (ou publique de novo) para carregar. No servidor publicado, a penalidade subiu o 1º lugar certo de 71% para 79%, sem piorar nenhum scan. Sem o arquivo, o servidor funciona igual, só sem a penalidade.
+
+### 4. Rodar
 
 ```bash
 pip install -r requirements.txt
@@ -47,7 +59,7 @@ curl -F file=@minha-carta.jpg http://localhost:8000/recognize
 
 Aponte o site para ele: `VITE_RECOGNIZE_URL=http://localhost:8000 npm run dev` na raiz do repo.
 
-### 4. Publicar no Fly.io (opcional)
+### 5. Publicar no Fly.io (opcional)
 
 ```bash
 cp fly.toml.example fly.toml       # troque o nome do app
@@ -61,7 +73,7 @@ Com `auto_stop_machines = "suspend"`, a máquina dorme quando ninguém usa e aco
 
 | Variável | Padrão | Uso |
 |---|---|---|
-| `MODELS_DIR` | `./models` | Pasta com `model.onnx`, `emb.f16.bin` e `meta.json`. |
+| `MODELS_DIR` | `./models` | Pasta com `model.onnx`, `emb.f16.bin`, `meta.json` e, opcional, `hub.json`. |
 | `ALLOW_ORIGINS` | `*` | Origens liberadas no CORS, separadas por vírgula. Coloque a URL do seu site. |
 | `MAX_CONCURRENCY` | `1` | Reconhecimentos em paralelo. Com 1 vCPU, deixe 1: dois em paralelo levam o dobro cada. |
 | `DEBUG_DIR` | vazio | Se definido, guarda cada foto recebida por 6 horas (para depurar erros). |
