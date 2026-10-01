@@ -45,11 +45,20 @@ const QUAD_INTERVAL_MS = 200;
 const QUAD_PROXY_DIM = 480;
 // Lado maior da foto nítida (takePhoto) usada para os recortes.
 const SHOT_MAX_DIM = 2400;
-const QUAD_STABLE_SLING = 2;
+// ~0.8s com o contorno parado. Com 2 (~0.4s) o sling disparava com a mão ainda
+// ajeitando a carta e parecia "rápido demais" (2026-09-30: 7 disparos em 15s).
+const QUAD_STABLE_SLING = 4;
+// Pausa mínima entre o resultado de uma carta e o próximo disparo: tempo de ler
+// o resultado e trocar a carta. Sem ela, o re-arme (contorno mudou, 4s, misses)
+// disparava de novo na mesma carta a cada ~2s.
+const SLING_COOLDOWN_MS = 1500;
 const QUAD_STABLE_HAND = 4;
 const QUAD_STILL_PX = 6;       // movimento médio por canto abaixo disso = parado
 const QUAD_ADOPT_PX = 40;      // salto maior só é adotado com 2 detecções confirmando
-const QUAD_MISS_REARM = 2;
+// 5 (~1s sem carta) e não 2: com o clássico no quadro inteiro, 2 falhas
+// seguidas acontecem com a carta parada e rearmavam o sling na mesma carta a
+// cada ~2s (2026-09-30).
+const QUAD_MISS_REARM = 5;
 const QUAD_MOVED_REARM_PX = 40;
 
 export class Scanner {
@@ -216,6 +225,7 @@ export class Scanner {
    * @returns "added" when the caller must add the card, "duplicate" when the same card is still in frame.
    */
   slingAccept(rec: Recognition): "added" | "duplicate" {
+    this.slingResultAt = Date.now();
     const id = rec.card.api_id;
     // Sem janela de tempo: a carta parada no quadro furava um guard de 30s.
     // Sair do quadro é o único jeito de somar a mesma carta de novo.
@@ -234,9 +244,16 @@ export class Scanner {
 
   /** Sling only: the capture was not a strong match. Wait for the frame to empty and try again. */
   slingReject(): void {
+    this.slingResultAt = Date.now();
     this.pin = "Não reconheci — tire a carta e ponha de novo";
     this.flashFrame("is-rejected", 600);
     this.resume();
+  }
+
+  private slingResultAt = 0;
+
+  private slingCooling(): boolean {
+    return this.sling && Date.now() - this.slingResultAt < SLING_COOLDOWN_MS;
   }
 
   private flashFrame(cls: string, ms: number): void {
@@ -304,7 +321,7 @@ export class Scanner {
       this.cardGoneSinceAdd = true;
       this.pin = "";
       this.hooks.progress(0);
-      this.setStatus(this.sling ? "Sling pronto — ponha a próxima carta" : "Aponte a câmera para uma carta");
+      this.setStatus(this.sling ? (this.lastAddedId ? "Pronto — ponha a próxima carta" : "Sling pronto — ponha a próxima carta") : "Aponte a câmera para uma carta");
       return;
     }
 
@@ -329,10 +346,7 @@ export class Scanner {
       // Rig fixo: troca carta-sobre-carta sem quadro vazio. Rearma quando o
       // conteúdo difere bastante da carta que acabou de entrar na lista.
       if (diff > SLING_DIFF) this.movedSince = true;
-      if (this.movedSince && this.lastAddData && frameDiff(data, this.lastAddData) > SLING_DIFF) {
-        this.armed = true;
-        this.cardGoneSinceAdd = true;   // outra carta no quadro: a mesma id depois disso é 2ª cópia
-      }
+      if (this.movedSince && this.lastAddData && frameDiff(data, this.lastAddData) > SLING_DIFF) this.armed = true;
       if (this.disarmedAt && Date.now() - this.disarmedAt > SLING_REARM_TIMEOUT_MS) this.armed = true;
     }
     const waiting = this.sling && !this.armed;
@@ -345,7 +359,7 @@ export class Scanner {
     else this.setStatus("Enquadre a carta");
 
     this.lastData = data;
-    if (waiting) return;
+    if (waiting || this.slingCooling()) return;
     if (this.stable >= need && focused) {
       this.capture(this.currentFrameQuad() || undefined);
       return;
@@ -496,7 +510,7 @@ export class Scanner {
         this.armed = true;
       }
       const need = this.sling ? QUAD_STABLE_SLING : QUAD_STABLE_HAND;
-      if (this.quadStable >= need && (!this.sling || this.armed) && this.coords && !this.paused) {
+      if (this.quadStable >= need && (!this.sling || this.armed) && !this.slingCooling() && this.coords && !this.paused) {
         this.quadFiredAt = this.quadLast;
         this.quadStable = 0;
         // Corta pelos cantos crus desta detecção: a EMA fica meio passo atrás da borda real.
