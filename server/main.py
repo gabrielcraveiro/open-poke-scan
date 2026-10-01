@@ -61,12 +61,20 @@ for _c in META:
 # 1º lugar certo de 71% para 79%, sem estragar nenhum. Sem o arquivo, não há
 # penalidade.
 _HUB_ALPHA = 0.25
+# Preferência de idioma: desconto fixo no score das coleções japonesas (set_id
+# "-jp", seed da Liga). Muitas japonesas têm a MESMA arte da versão em inglês,
+# e aí a japonesa ganhava o 1º lugar por um fio (Bubbly Energy me04-084 →
+# m6-jp-106). Carta japonesa sem versão em inglês ganha por muito (Altaria
+# M6-087: 0,87 contra 0,70) e não é afetada. Eval de 2026-10-01: 93 → 94 de 121,
+# Altaria japonesa certa nas 3 fotos com qualquer desconto entre 0,02 e 0,08.
+_JP_PRIOR = 0.03
 try:
     with open(os.path.join(MODELS, "hub.json")) as _f:
         _hub = json.load(_f)
     HUB = np.array([_hub["cards"].get(c["api_id"], _hub["median"]) for c in META], dtype=np.float32)
 except (OSError, ValueError, KeyError):
     HUB = np.zeros(len(META), dtype=np.float32)
+JP = np.array([str(c.get("set_id") or "").endswith("-jp") for c in META], dtype=np.float32)
 
 # ── OCR do número ────────────────────────────────────────────────────────────
 # Configs de um grid search offline (24 combinações de tira/escala/PSM):
@@ -343,7 +351,7 @@ async def recognize(request: Request, file: UploadFile = File(...), pre: str = F
         vec = await asyncio.to_thread(embed, emb_sess, img)
         t_emb = time.time()
         sims = MAT @ vec
-        score = sims - _HUB_ALPHA * HUB
+        score = sims - _HUB_ALPHA * HUB - _JP_PRIOR * JP
         topk = [int(i) for i in np.argsort(-score)[:25]]
         pick = topk[0]
         gap = float(score[topk[0]] - score[topk[1]]) if len(topk) > 1 else 1.0
