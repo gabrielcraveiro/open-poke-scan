@@ -110,12 +110,76 @@ Resposta:
             "set_name": "Stellar Crown", "printed_total": 142,
             "image_url": "https://assets.tcgdex.net/en/sv/sv07/158/low.webp", "cos": 0.91 },
   "confident": true,
+  "not_card": false,
   "ocr": { "number": "158", "total": "142", "match": true },
   "candidates": [ "… até 5 cartas no mesmo formato de card …" ]
 }
 ```
 
+- `confident`: `true` quando o número lido confere, ou quando a semelhança é alta com folga sobre a 2ª candidata. Com `false`, mostre as candidatas para a pessoa escolher.
+- `not_card`: `true` quando a foto não parece carta nenhuma (mão, mesa, tecido). O `card` continua vindo, mas não deve ser mostrado.
+- `candidates`: na ordem do ranking do servidor, que desconta as cartas "ímã". Por isso o `cos` nem sempre aparece em ordem decrescente.
+- `api_id` é o id do [TCGdex](https://tcgdex.dev), na maioria das cartas: `https://api.tcgdex.net/v2/en/cards/{api_id}` traz o resto dos dados. As exceções são as coleções que só o servidor publicado tem (ex.: `m6-jp-87`).
+
 `GET /health` acorda o servidor. O site chama essa rota ao abrir, porque a máquina suspende quando fica ociosa e o primeiro scan depois disso pode levar ~20s.
+
+### Exemplos
+
+Uma foto da carta, de preferência só a carta (sem `pre`, o servidor procura a carta na foto). Troque `SERVER` pelo seu servidor (veja [Usar o reconhecimento no seu projeto](#usar-o-reconhecimento-no-seu-projeto)).
+
+**curl**
+
+```bash
+curl -F "file=@carta.jpg" https://cartinhas-recognize.fly.dev/recognize
+```
+
+**JavaScript** (navegador ou Node 18+)
+
+```js
+const SERVER = "https://cartinhas-recognize.fly.dev";
+
+// `foto` é um Blob/File: um <input type="file">, ou canvas.toBlob(cb, "image/jpeg", 0.8).
+async function reconhecer(foto) {
+  const form = new FormData();
+  form.append("file", foto, "carta.jpg");
+  const res = await fetch(`${SERVER}/recognize`, { method: "POST", body: form });
+  const r = await res.json();
+  if (r.not_card) return null;
+  return { carta: r.card, certeza: r.confident, candidatas: r.candidates };
+}
+```
+
+**Python**
+
+```python
+import requests
+
+SERVER = "https://cartinhas-recognize.fly.dev"
+
+with open("carta.jpg", "rb") as f:
+    r = requests.post(f"{SERVER}/recognize", files={"file": ("carta.jpg", f, "image/jpeg")}, timeout=60).json()
+
+if r["not_card"]:
+    print("Não é uma carta")
+else:
+    c = r["card"]
+    print(c["name"], c["set_name"], c["number"], "(certeza)" if r["confident"] else "(confira)")
+    for alt in r["candidates"]:
+        print(" -", alt["api_id"], alt["cos"])
+```
+
+Saída com a foto do Altaria de Surging Sparks:
+
+```
+Altaria Surging Sparks 134 (certeza)
+ - sv08-134 0.916
+ - swsh3.5-49 0.732
+ - swsh12-143 0.733
+ - swsh7-106 0.716
+ - sv03-160 0.746
+```
+
+A primeira chamada com a máquina dormindo leva até ~20s. Use um timeout de pelo menos 40s, ou chame `GET /health` antes.
 
 ## Privacidade
 
