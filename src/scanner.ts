@@ -329,7 +329,10 @@ export class Scanner {
       // Rig fixo: troca carta-sobre-carta sem quadro vazio. Rearma quando o
       // conteúdo difere bastante da carta que acabou de entrar na lista.
       if (diff > SLING_DIFF) this.movedSince = true;
-      if (this.movedSince && this.lastAddData && frameDiff(data, this.lastAddData) > SLING_DIFF) this.armed = true;
+      if (this.movedSince && this.lastAddData && frameDiff(data, this.lastAddData) > SLING_DIFF) {
+        this.armed = true;
+        this.cardGoneSinceAdd = true;   // outra carta no quadro: a mesma id depois disso é 2ª cópia
+      }
       if (this.disarmedAt && Date.now() - this.disarmedAt > SLING_REARM_TIMEOUT_MS) this.armed = true;
     }
     const waiting = this.sling && !this.armed;
@@ -458,10 +461,14 @@ export class Scanner {
         this.quadPending = null;
         // Um miss isolado não apaga o contorno (reflexo/blur num frame só);
         // apagar a cada falha deixava a retícula piscando.
+        // Não solta o guard de identidade do sling (cardGoneSinceAdd): com o
+        // clássico no quadro inteiro, 2 misses seguidos acontecem com a carta
+        // parada, e a MESMA carta entrava de novo a cada ~2s (30th-120 somada
+        // 4× em 12s, 2026-09-30). Só quadro vazio ou imagem bem diferente da
+        // carta adicionada soltam o guard (tick).
         if (this.quadMiss >= 2) {
           this.quadLast = null;
           this.quadRaw = null;
-          this.cardGoneSinceAdd = true;
         }
         if (this.sling && !this.armed && this.quadMiss >= QUAD_MISS_REARM) {
           this.armed = true;
