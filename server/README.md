@@ -17,6 +17,19 @@ Roda em CPU. Um scan leva ~0,3–1s numa máquina de 1 vCPU.
 
 Precisa de Python 3.12 e do Tesseract (`apt install tesseract-ocr` / `brew install tesseract`).
 
+### Atalho: baixar o índice pronto
+
+A [última release](https://github.com/gabrielcraveiro/open-poke-scan/releases/latest) traz os quatro arquivos que o servidor lê em `models/`: o modelo, o índice (~20 mil cartas com imagem do TCGdex e do pokemontcg.io) e a penalidade das cartas "ímã". Com eles, pule os passos 1 a 3:
+
+```bash
+cd server
+for f in model.onnx emb.f16.bin meta.json hub.json; do
+  curl -L -o models/$f https://github.com/gabrielcraveiro/open-poke-scan/releases/latest/download/$f
+done
+```
+
+O índice da release é atualizado quando sai coleção nova. Para ter uma coleção antes disso, gere o seu (passo 2).
+
 ### 1. Exportar o modelo (uma vez)
 
 ```bash

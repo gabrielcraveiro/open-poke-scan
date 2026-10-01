@@ -71,7 +71,7 @@ Tudo isso está no código de [`server/`](server/), com os scripts para gerar o 
 
 ### 1. Rodar o seu servidor (recomendado)
 
-Siga o [`server/README.md`](server/README.md):
+Siga o [`server/README.md`](server/README.md). O atalho é baixar da [última release](https://github.com/gabrielcraveiro/open-poke-scan/releases/latest) o modelo, o índice e a penalidade prontos, e pular direto para rodar. Do zero:
 
 1. Exporte o modelo, que é idêntico ao do servidor publicado.
 2. Gere o índice a partir do TCGdex.
