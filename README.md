@@ -8,11 +8,12 @@ Scanner de cartas Pokémon TCG pela câmera do celular, direto no navegador. Apo
 
 - **Scan:** a retícula acompanha a carta e captura sozinha quando a imagem fica parada e nítida. O botão redondo força a captura.
 - **Resultado:** imagem, nome, set e número da carta; preço de referência em real (mercado brasileiro); links de busca na Liga e na MYP.
+- **Sem certeza:** quando o servidor não está confiante, a tela pergunta "Qual destas é a sua?" e mostra as candidatas grandes, com o set e o número em destaque. Um toque escolhe.
 - **"Não é essa":** volta para a câmera. As outras candidatas aparecem no resultado para escolher com um toque.
 - **Modo sling:** para lotes. Jogue as cartas uma a uma sob a câmera e cada carta reconhecida com confiança entra na lista sozinha. Na dúvida, a carta não entra: tire e ponha de novo.
 - **Lista:** fica só no aparelho (localStorage). Dá para copiar como texto ou baixar em CSV.
 
-Cartas em japonês ou coreano são identificadas pela arte e caem na versão em inglês equivalente.
+Cartas em japonês ou coreano são identificadas pela arte e caem na versão em inglês equivalente. O servidor publicado também tem algumas coleções japonesas inteiras (ex.: Storm Emeralda), com a imagem da carta japonesa.
 
 ## Como funciona
 
@@ -20,15 +21,16 @@ Cartas em japonês ou coreano são identificadas pela arte e caem na versão em 
 câmera → retícula viva (scanic, segue os 4 cantos da carta)
        → foto nítida → YOLO acha os 4 cantos → corte com correção de perspectiva
        → POST /recognize (servidor)
-           DINOv2-S @336 → similaridade de cosseno contra ~22 mil cartas
+           DINOv2-S @336 → similaridade de cosseno contra ~20 mil cartas
+           → menos a penalidade das cartas "ímã" (as que parecem com qualquer foto)
            → desempate por pHash quando dois prints têm a mesma arte
-           → OCR do número (Tesseract) só quando o match é ambíguo
+           → OCR do número (Tesseract), lido no rodapé em alta resolução, só quando o match é ambíguo
        → resultado + preço de referência + links de busca
 ```
 
 O reconhecimento roda num servidor, não no celular. Rodar o modelo no navegador travava a tela e levava segundos por carta. No servidor quente, um scan leva ~0,5s.
 
-O site publicado usa o nosso servidor. Para rodar o seu do zero (modelo público + índice gerado a partir do TCGdex), veja [`server/README.md`](server/README.md).
+O site publicado usa o nosso servidor. Para usar o reconhecimento no seu projeto, veja [Usar o reconhecimento no seu projeto](#usar-o-reconhecimento-no-seu-projeto).
 
 Decisões de arquitetura e o porquê de cada uma: [`docs/arquitetura.md`](docs/arquitetura.md).
 
@@ -53,9 +55,44 @@ O `dist/` é estático e roda em qualquer host (Vercel, Netlify, GitHub Pages, C
 
 | Variável | Uso |
 |---|---|
-| `VITE_RECOGNIZE_URL` | URL do servidor de reconhecimento. |
+| `VITE_RECOGNIZE_URL` | URL do servidor de reconhecimento. Vazio = o servidor publicado (`https://cartinhas-recognize.fly.dev`). |
 | `VITE_FEEDBACK_URL` | Opcional. Link do botão "Mandar feedback". |
 | `VITE_TELEMETRY_URL` | Opcional. Endpoint que recebe a telemetria anônima (`POST`, corpo JSON em texto puro). Vazio = sem telemetria. |
+
+## Usar o reconhecimento no seu projeto
+
+Não existe um modelo treinado por nós. O modelo é o [DINOv2-small](https://huggingface.co/facebook/dinov2-small) público (Meta, Apache-2.0), sem ajuste. O que faz o reconhecimento funcionar é o que está em volta dele:
+
+- **O índice de cartas:** um vetor por carta, a partir das imagens oficiais.
+- **A penalidade das cartas "ímã":** medida com fotos reais de scans.
+- **Os limites calibrados:** "não é carta", "confiante" e quando ler o número. Foram calibrados com 160 scans reais conferidos à mão.
+
+Tudo isso está no código de [`server/`](server/), com os scripts para gerar o modelo e o índice. Há duas formas de usar:
+
+### 1. Rodar o seu servidor (recomendado)
+
+Siga o [`server/README.md`](server/README.md):
+
+1. Exporte o modelo, que é idêntico ao do servidor publicado.
+2. Gere o índice a partir do TCGdex.
+3. Opcional: gere a penalidade com as suas fotos de scan.
+4. Publique, por exemplo num Fly.io de 1 vCPU (poucos dólares por mês).
+5. Aponte o site com `VITE_RECOGNIZE_URL`.
+
+Diferenças para o servidor publicado:
+- O seu índice tem só o que o TCGdex tem.
+- O publicado tem, além disso, cartas que o TCGdex lista sem imagem (promos completadas com a imagem da Liga e do pokemontcg.io), algumas coleções japonesas e um detector YOLO para fotos sem recorte.
+
+### 2. Usar o servidor publicado
+
+Um build sem `VITE_RECOGNIZE_URL` já usa o nosso servidor (`https://cartinhas-recognize.fly.dev`), que aceita chamadas de qualquer site. Serve para testar e para uso pessoal, com estes limites:
+
+- É **uma máquina de 1 vCPU**, compartilhada com o app que deu origem a este projeto. Os scans de todos entram na mesma fila, e um pico de uso deixa todo mundo lento.
+- **Não há garantia** de disponibilidade nem de que o endereço ou o contrato da API continuem iguais.
+- A máquina dorme quando ninguém usa. O primeiro scan depois disso leva até ~20s.
+- As fotos recebidas ficam até ~6 horas em disco, para depurar erros (veja [Privacidade](#privacidade)).
+
+Para um site com tráfego de verdade, rode o seu servidor (opção 1).
 
 ## Contrato do servidor
 
