@@ -118,6 +118,19 @@ def _find_num(text):
     return None
 
 
+_NUM_ONLY_RE = re.compile(r"(?<!\d)(\d{3})\s*/")
+
+
+def _find_num_only(text):
+    """Number of 3 digits with an unreadable total ("055/33718"), or None.
+
+    Use it only as a fallback of _find_num. decide() uses a number without a
+    total only to choose between reprints with the name of the first candidate.
+    """
+    m = _NUM_ONLY_RE.search(text)
+    return (m.group(1), None) if m else None
+
+
 def _norm_strip(strip: Image.Image) -> Image.Image:
     if strip.width > _OCR_STRIP_W:
         nh = max(1, round(strip.height * _OCR_STRIP_W / strip.width))
@@ -176,7 +189,7 @@ def read_number_footer(strip: Image.Image, budget_s: float):
     tess = _tess(time.time() + budget_s)
     gray = strip.convert("L")
     w, h = gray.size
-    raws = []
+    raws, partial = [], None
     for x0, y0, x1, y1 in _OCR_CORNERS:
         c = gray.crop((int(w * x0), int(h * y0), int(w * x1), int(h * y1)))
         up = max(1.0, _OCR_CORNER_H / max(1, c.height))
@@ -189,6 +202,9 @@ def read_number_footer(strip: Image.Image, budget_s: float):
             hit = _find_num(text)
             if hit:
                 return hit[0], hit[1], " | ".join(raws)
+            partial = partial or _find_num_only(text)
+    if partial:
+        return partial[0], None, " | ".join(raws)
     return None, None, " | ".join(raws)
 
 
@@ -202,8 +218,9 @@ _NOT_CARD_COS = 0.55
 #   sobre o 2º deu 80/81 certos. Folga pequena = mesma arte em outro print.
 _CONF_COS = 0.72
 _CONF_GAP = 0.03
-# - O total impresso separa sets com a mesma arte: vale como desempate entre
-#   candidatos quase empatados, não como prova.
+# - O total impresso separa sets com a mesma arte: desempata candidatos quase
+#   empatados e, quando só UM deles tem esse total, vale como confiança
+#   (reimpressões como Duraludon sv07-106 /142 e sv08.5-069 /131).
 _TOTAL_FUSION_TOPN = 5
 _TOTAL_FUSION_GAP = 0.03
 # Gap top1−top2 abaixo disso = empate de arte, e o pHash decide.
@@ -229,7 +246,9 @@ def decide(sims, score, topk, pick, num=None, total=None):
             confident) use the raw cosine.
         topk: row indices of the best matches, best first (ordered by `score`).
         pick: row that the ranking (plus the pHash tie-break) chose.
-        num, total: collector number read by OCR, or None.
+        num, total: collector number read by OCR, or None. total is None when
+            OCR read only the number: then num picks only among reprints that
+            have the name of the first candidate.
 
     Returns:
         dict with keys pick, number_match, total_match, confident, not_card.
@@ -242,8 +261,12 @@ def decide(sims, score, topk, pick, num=None, total=None):
                       if total and str(META[i].get("printed_total")) == str(int(_digits(total)))]
         if with_total:
             pick, number_match = with_total[0], True
-        elif pool and not total:
-            pick, number_match = pool[0], True
+        elif not total:
+            # Número sem total: leitura fraca, então só escolhe entre
+            # reimpressões com o mesmo nome do 1º colocado.
+            same = [i for i in pool[:_TOTAL_FUSION_TOPN] if _name_key(i) == _name_key(topk[0])]
+            if same:
+                pick, number_match = same[0], True
         # Número bate mas o total contradiz: a carta provavelmente não está no
         # catálogo. Não força; fica o embedding.
     if total and not number_match:
@@ -253,10 +276,13 @@ def decide(sims, score, topk, pick, num=None, total=None):
                 and float(score[topk[0]] - score[i]) < _TOTAL_FUSION_GAP]
         if near and near[0] != pick:
             pick, total_match = near[0], True
+        total_ok = len(near) == 1 and near[0] == pick
+    else:
+        total_ok = False
     top_cos = float(max(sims[i] for i in topk))
     others = [float(score[i]) for i in topk if i != pick]
     gap = float(score[pick]) - (max(others) if others else 0.0)
-    confident = number_match or (float(sims[pick]) >= _CONF_COS and gap >= _CONF_GAP)
+    confident = number_match or (float(sims[pick]) >= _CONF_COS and (gap >= _CONF_GAP or total_ok))
     return {"pick": pick, "number_match": number_match, "total_match": total_match,
             "confident": confident, "not_card": top_cos < _NOT_CARD_COS}
 
