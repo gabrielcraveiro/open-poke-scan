@@ -74,7 +74,22 @@ curl -F file=@minha-carta.jpg http://localhost:8000/recognize
 
 Aponte o site para ele: `VITE_RECOGNIZE_URL=http://localhost:8000 npm run dev` na raiz do repo.
 
-### 5. Publicar no Fly.io (opcional)
+### 5. Medir uma mudança (opcional)
+
+Antes e depois de mexer no índice, na penalidade ou nos limiares, rode o eval e compare:
+
+```bash
+python scripts/eval_engine.py --photos ~/fotos-rotuladas --synth-footers 70 --save /tmp/antes.json
+# ... a mudança ...
+python scripts/eval_engine.py --photos ~/fotos-rotuladas --compare /tmp/antes.json
+```
+
+- `--photos`: uma foto por scan, já recortada, com o `api_id` certo no começo do nome do arquivo (`sv07-158__1.jpg`; quadro sem carta: `NOT_CARD__1.jpg`). As fotos que o servidor guarda com `DEBUG_DIR` servem, depois de conferidas.
+- `--synth-footers`: baixa rodapés de imagens oficiais do TCGdex, com blur e JPEG, e mede o OCR do número (resposta exata).
+
+O eval chama a mesma `recognize_image()` que o `POST /recognize` usa. No servidor publicado, com 129 cartas reais rotuladas, o nome lido levou o 1º lugar certo de 106 para 111 e as respostas confiantes de 69 para 74, todas certas.
+
+### 6. Publicar no Fly.io (opcional)
 
 ```bash
 cp fly.toml.example fly.toml       # troque o nome do app
