@@ -8,14 +8,14 @@ Serviço que o site chama para identificar a carta (`POST /recognize`). O site p
 2. **Busca:** similaridade de cosseno contra o índice de cartas (~20 mil do [TCGdex](https://tcgdex.dev); as cartas do TCG Pocket, só digitais, saem no boot).
 3. **Penalidade das cartas "ímã"** (opcional): algumas cartas parecem com quase qualquer foto lavada por reflexo e roubam o 1º lugar. Com `models/hub.json`, a ordem usa `cosseno − 0,25 × penalidade da carta`. Veja o passo 3.
 4. **Desempate:** pHash da arte quando dois prints têm quase a mesma imagem.
-5. **OCR do número** (Tesseract): só quando o match é ambíguo, ou quando as duas primeiras cartas têm o mesmo nome (mesma arte em outro set). Lê os cantos de baixo do campo `footer` (o rodapé em resolução cheia que o site manda) ou, sem ele, o rodapé da própria foto. Número + total impresso é quase uma chave única.
-6. **Confiança:** `confident` quando o número confere, ou com cosseno ≥ 0,72 e folga ≥ 0,03 sobre a 2ª. Abaixo de 0,55, `not_card` (mão, mesa, tecido). Calibrado com 160 scans reais rotulados.
+5. **OCR** ([RapidOCR](https://github.com/RapidAI/RapidOCR), PP-OCRv4 em ONNX, Apache-2.0): só quando o match é ambíguo, ou quando as duas primeiras cartas têm o mesmo nome (mesma arte em outro set). Primeiro lê o **nome** no topo da carta (~100ms): as cartas desse nome passam para a frente. Se ainda não houver confiança, lê o **número** nas linhas curtas de baixo do campo `footer` (o rodapé em resolução cheia que o site manda) ou, sem ele, no rodapé da própria foto (~200ms). Número + total impresso é quase uma chave única.
+6. **Confiança:** `confident` quando o número confere; com cosseno ≥ 0,72 e folga ≥ 0,03 sobre a 2ª; ou quando o nome confere, com cosseno ≥ 0,70 e folga ≥ 0,03 sobre as outras cartas do mesmo nome. Abaixo de 0,55, `not_card` (mão, mesa, tecido). Calibrado com 160 scans reais rotulados.
 
 Roda em CPU. Um scan leva ~0,3–1s numa máquina de 1 vCPU.
 
 ## Passo a passo
 
-Precisa de Python 3.12 e do Tesseract (`apt install tesseract-ocr` / `brew install tesseract`).
+Precisa de Python 3.12.
 
 ### Atalho: baixar o índice pronto
 
@@ -66,6 +66,8 @@ Grava `models/hub.json`. Reinicie o servidor (ou publique de novo) para carregar
 
 ```bash
 pip install -r requirements.txt
+# sem as dependências: ele pede o opencv-python, e o requirements já traz o headless
+pip install --no-deps rapidocr_onnxruntime==1.4.4
 uvicorn main:app --port 8000
 curl -F file=@minha-carta.jpg http://localhost:8000/recognize
 ```

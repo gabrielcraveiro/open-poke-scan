@@ -24,7 +24,7 @@ câmera → retícula viva (scanic, segue os 4 cantos da carta)
            DINOv2-S @336 → similaridade de cosseno contra ~20 mil cartas
            → menos a penalidade das cartas "ímã" (as que parecem com qualquer foto)
            → desempate por pHash quando dois prints têm a mesma arte
-           → OCR do número (Tesseract), lido no rodapé em alta resolução, só quando o match é ambíguo
+           → só quando o match é ambíguo, OCR (RapidOCR): o nome no topo da carta e, se ainda faltar, o número no rodapé em alta resolução
        → resultado + preço de referência + links de busca
 ```
 
@@ -111,14 +111,16 @@ Resposta:
             "image_url": "https://assets.tcgdex.net/en/sv/sv07/158/low.webp", "cos": 0.91 },
   "confident": true,
   "not_card": false,
-  "ocr": { "number": "158", "total": "142", "match": true },
+  "ocr": { "number": "158", "total": "142", "match": true, "name": "Lapras ex 220", "name_match": true },
   "candidates": [ "… até 5 cartas no mesmo formato de card …" ]
 }
 ```
 
-- `confident`: `true` quando o número lido confere, ou quando a semelhança é alta com folga sobre a 2ª candidata. Com `false`, mostre as candidatas para a pessoa escolher.
+- `confident`: `true` quando o número lido confere, quando a semelhança é alta com folga sobre a 2ª candidata, ou quando o nome lido confere e a semelhança é alta com folga sobre as outras cartas desse nome. Com `false`, mostre as candidatas para a pessoa escolher.
 - `not_card`: `true` quando a foto não parece carta nenhuma (mão, mesa, tecido). O `card` continua vindo, mas não deve ser mostrado.
-- `candidates`: na ordem do ranking do servidor, que desconta as cartas "ímã". Por isso o `cos` nem sempre aparece em ordem decrescente.
+- `candidates`: a carta escolhida primeiro, depois a ordem do ranking do servidor, que desconta as cartas "ímã" e põe na frente as cartas do nome lido. Por isso o `cos` nem sempre aparece em ordem decrescente.
+- `ocr`: o que o servidor leu na carta. `name` é o texto lido no topo e `name_match` diz se ele casou com o nome de alguma carta. Os dois vêm vazios quando o OCR não rodou (match decisivo ou quadro sem carta).
+- Erros: `400` quando o `file` não é uma imagem; `413` quando a imagem tem mais de 16 milhões de pixels.
 - `api_id` é o id do [TCGdex](https://tcgdex.dev), na maioria das cartas: `https://api.tcgdex.net/v2/en/cards/{api_id}` traz o resto dos dados. As exceções são as coleções que só o servidor publicado tem (ex.: `m6-jp-87`).
 
 `GET /health` acorda o servidor. O site chama essa rota ao abrir, porque a máquina suspende quando fica ociosa e o primeiro scan depois disso pode levar ~20s.
