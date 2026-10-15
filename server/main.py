@@ -81,7 +81,6 @@ JP = np.array([str(c.get("set_id") or "").endswith("-jp") for c in META], dtype=
 # o composto abaixo leu 5/10 com 0 leituras erradas em ~470ms.
 _TESS_BLOCK = "--psm 6 -c tessedit_char_whitelist=0123456789/"
 _TESS_SPARSE = "--psm 11 -c tessedit_char_whitelist=0123456789/"
-_TESS_LINE = "--psm 7 -c tessedit_char_whitelist=0123456789/"
 _NUM_RE = re.compile(r"(\d{1,4})\s*/\s*(\d{1,3})(?!\d)")
 # Largura da tira antes do upscale 3×. Sem normalizar, uploads grandes
 # estouravam o timeout do OCR em todo scan.
@@ -92,9 +91,11 @@ _OCR_STRIP_W = 600
 # 32 rodapés reais com gabarito: 7 números certos contra 6 da faixa inteira, e
 # o pior caso de 804 para 584ms.
 _OCR_CORNERS = ((0.0, 0.66, 0.50, 1.0), (0.55, 0.66, 1.0, 1.0))
-# Altura do recorte depois do upscale: a linha do número ocupa ~1/3 dele, e o
-# Tesseract lê melhor com letras de ~30-40px.
-_OCR_CORNER_H = 110
+# Altura do recorte depois do upscale. Com 110px os dígitos ficavam com ~20px
+# e o tesseract perdia o número; 200px + LANCZOS leu 9 de 32 rodapés reais
+# contra 6, sem leitura errada. PSM 7 (linha única) saiu: o recorte tem 3-4
+# linhas e ele não lia nada.
+_OCR_CORNER_H = 200
 
 
 def _digits(s) -> str:
@@ -193,8 +194,8 @@ def read_number_footer(strip: Image.Image, budget_s: float):
     for x0, y0, x1, y1 in _OCR_CORNERS:
         c = gray.crop((int(w * x0), int(h * y0), int(w * x1), int(h * y1)))
         up = max(1.0, _OCR_CORNER_H / max(1, c.height))
-        c = ImageOps.autocontrast(c.resize((round(c.width * up), round(c.height * up))))
-        for cfg in (_TESS_LINE, _TESS_SPARSE):
+        c = ImageOps.autocontrast(c.resize((round(c.width * up), round(c.height * up)), Image.LANCZOS))
+        for cfg in (_TESS_SPARSE, _TESS_BLOCK):
             text = tess(c, cfg)
             if text is None:
                 return None, None, " | ".join(raws + ["(ocr timeout)"])
@@ -236,7 +237,27 @@ def _name_key(i: int) -> str:
     return re.sub(r"[^a-z0-9]", "", str(META[i]["name"]).lower())
 
 
-def decide(sims, score, topk, pick, num=None, total=None):
+def _guided_number(text, topk):
+    """Candidate whose collector number is in the OCR text, or None.
+
+    The tesseract reads the stylized slash of the modern cards as "7"
+    ("035/131" → "03577370"), so _find_num does not see a number. Here each
+    candidate's own number, padded to 3 digits, must be in the text followed
+    by "/" or "7". Only cards with a 3-digit printed number take part (the
+    padded "035" is specific; "12" of an old card is not). All matches must
+    have the same name, else the result is None.
+    """
+    hits = []
+    for i in topk:
+        n = str(META[i]["number"])
+        if n.isdigit() and len(n) <= 3 and re.search(rf"(?<!\d){n.zfill(3)}[/7]", text):
+            hits.append(i)
+    if hits and len({_name_key(i) for i in hits}) == 1:
+        return hits[0]
+    return None
+
+
+def decide(sims, score, topk, pick, num=None, total=None, text=""):
     """Apply the OCR fusion and the confidence gate to one ranking.
 
     Args:
@@ -249,6 +270,7 @@ def decide(sims, score, topk, pick, num=None, total=None):
         num, total: collector number read by OCR, or None. total is None when
             OCR read only the number: then num picks only among reprints that
             have the name of the first candidate.
+        text: all OCR text, for _guided_number when num gives no match.
 
     Returns:
         dict with keys pick, number_match, total_match, confident, not_card.
@@ -279,6 +301,10 @@ def decide(sims, score, topk, pick, num=None, total=None):
         total_ok = len(near) == 1 and near[0] == pick
     else:
         total_ok = False
+    if text and not number_match:
+        g = _guided_number(text, topk)
+        if g is not None:
+            pick, number_match = g, True
     top_cos = float(max(sims[i] for i in topk))
     others = [float(score[i]) for i in topk if i != pick]
     gap = float(score[pick]) - (max(others) if others else 0.0)
@@ -408,7 +434,7 @@ async def recognize(request: Request, file: UploadFile = File(...), pre: str = F
             num, total, raw = await _ocr_bounded(img, strip)
             if strip is not None:
                 raw = "[hi] " + raw
-        verdict = decide(sims, score, topk, pick, num, total)
+        verdict = decide(sims, score, topk, pick, num, total, raw)
         pick = verdict["pick"]
 
         print(f"[REC] ocr={num}/{total} match={verdict['number_match']} notcard={verdict['not_card']} "
