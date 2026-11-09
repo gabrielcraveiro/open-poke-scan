@@ -5,7 +5,8 @@
 // foco automático contínuo.
 
 const CAM_KEY = "openpokescan.camera";
-const HI_RES = { width: { ideal: 1920 }, height: { ideal: 1440 } };
+// 24fps: o detector roda a ~5/s, então os 30fps do sensor só aqueciam o celular.
+const HI_RES = { width: { ideal: 1920 }, height: { ideal: 1440 }, frameRate: { ideal: 24, max: 30 } };
 
 /** What the browser reports about the open camera. Sent with the scan telemetry. */
 export interface CameraInfo {

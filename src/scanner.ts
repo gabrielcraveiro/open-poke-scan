@@ -42,6 +42,14 @@ const FAILSAFE_SLING_MS = 2500;
 const SLING_REARM_TIMEOUT_MS = 4000;
 
 const QUAD_INTERVAL_MS = 200;
+// Calor entre scans: sem carta na retícula o scanic no quadro inteiro rodava a
+// cada tick para nada. Vazio, ele cai para ~1.4/s; a carta entrando na retícula
+// (presença por pixel, barata) devolve o ritmo cheio no próximo tick.
+const QUAD_IDLE_INTERVAL_MS = 700;
+// Sling desarmado com a carta ainda no quadro: só falta ver ela sair.
+const QUAD_WAITING_INTERVAL_MS = 400;
+// Sem carta há tanto tempo, o tick de pixel também alterna (150 → 300ms).
+const IDLE_SLOWDOWN_MS = 1500;
 const QUAD_PROXY_DIM = 480;
 // Lado maior da foto nítida (takePhoto) usada para os recortes.
 const SHOT_MAX_DIM = 2400;
@@ -75,6 +83,9 @@ export class Scanner {
   private sharpPeak = 0;
   private lastData: Uint8ClampedArray | null = null;
   private presentSince = 0;
+  private idlePresent = true;
+  private emptySince = 0;
+  private idleSkip = false;
 
   private sling = false;
   private armed = true;
@@ -166,6 +177,7 @@ export class Scanner {
     if (!this.video.videoWidth) return "Câmera sem imagem. Feche outros apps que usam a câmera.";
     this.ro.observe(this.frame);
     this.coordsDirty = true;
+    this.idlePresent = true; this.emptySince = 0; this.idleSkip = false;
     setTimeout(() => { this.coordsDirty = true; }, 400);
     this.interval = window.setInterval(() => this.tick(), TICK_MS);
     this.startReticle();
@@ -289,6 +301,11 @@ export class Scanner {
       this.observeWhileCapturing();
       return;
     }
+    // Vazio há um tempo: um tick sim, outro não. Carta entrando zera o contador.
+    if (this.emptySince && Date.now() - this.emptySince > IDLE_SLOWDOWN_MS) {
+      this.idleSkip = !this.idleSkip;
+      if (this.idleSkip) return;
+    }
     const track = this.stream?.getVideoTracks()[0];
     if (track && track.readyState === "ended") { void this.restart(); return; }
     if (!this.coords || this.coordsDirty) this.updateCoords();
@@ -308,6 +325,8 @@ export class Scanner {
     const sharp = sharpness(data, cw, chh);
 
     const present = presence(data) >= PRESENCE_MIN;
+    this.idlePresent = present;
+    this.emptySince = present ? 0 : (this.emptySince || Date.now());
     this.frame.classList.toggle("card-present", present);
     if (present && !this.presentSince) this.presentSince = Date.now();
     if (!present) {
@@ -452,7 +471,11 @@ export class Scanner {
     const scanic = this.scanic;
     if (!scanic || this.quadBusy || this.capturing) return;
     const now = Date.now();
-    if (this.quadLast && now - this.quadLastRun < QUAD_INTERVAL_MS) return;
+    const interval = this.quadLast
+      ? (this.sling && !this.armed ? QUAD_WAITING_INTERVAL_MS : QUAD_INTERVAL_MS)
+      // Sling desarmado sem quad: os misses seguidos é que re-armam, não desacelera.
+      : (this.idlePresent || (this.sling && !this.armed) ? 0 : QUAD_IDLE_INTERVAL_MS);
+    if (now - this.quadLastRun < interval) return;
     this.quadLastRun = now;
     this.quadBusy = true;
     try {
@@ -551,7 +574,12 @@ export class Scanner {
     }
     // 0.35 por quadro: com a detecção a cada ~250ms no celular, 0.18 deixava o
     // contorno sempre atrás da carta.
-    this.reticle = this.reticle && !final ? Q.lerp(this.reticle, target, 0.35) : target;
+    const prev = this.reticle;
+    this.reticle = prev && !final ? Q.lerp(prev, target, 0.35) : target;
+    // Assentada (carta parada ou retícula em repouso): redesenhar o path a 60fps
+    // só gastava bateria. Mudança de layout move o alvo e volta a desenhar.
+    if (prev && !final && Q.avgDelta(this.reticle, prev) < 0.2 && this.overlay.style.opacity === "1"
+        && this.overlay.classList.contains("tracking") === tracking) return;
     const vw = v.videoWidth, vh = v.videoHeight, ew = v.clientWidth, eh = v.clientHeight;
     const s = Math.max(ew / vw, eh / vh);
     const cropX = (vw - ew / s) / 2, cropY = (vh - eh / s) / 2;
